@@ -163,6 +163,9 @@ class BaseAVModel(pl.LightningModule):
     def compute_loss(self, outputs):
         stats = {'loss': 0}
         pred, tgt = outputs['pred'], outputs['tgt']
+        #print(pred)
+        #print("PRED ABOVE, TGT BELOW")
+        #print(tgt)
 
         if self.args.skip_spec_loss:
             return stats
@@ -200,6 +203,8 @@ class BaseAVModel(pl.LightningModule):
         metrics = outputs[0].keys()
         output_str = f'Train epoch {self.current_epoch}, '
         for metric in metrics:
+            a = torch.Tensor([output[metric] for output in outputs])
+            #print(a)
             avg_value = torch.Tensor([output[metric] for output in outputs]).mean()
             self.logger.experiment.add_scalar(f'train/{metric}', avg_value, self.current_epoch)
             output_str += f'{metric}: {avg_value:.4f}, '
@@ -245,6 +250,7 @@ class BaseAVModel(pl.LightningModule):
         return wav
 
     def wav2spec(self, wav):
+        reshaped = False
         if len(wav.shape) == 3:
             b, c = wav.shape[:2]
             wav = wav.reshape((-1, wav.shape[2]))
@@ -279,7 +285,7 @@ class BaseAVModel(pl.LightningModule):
         #print(tgt_wav.shape)
         #print("TGT_WAV")
 
-        self.metrics = ['l2_distance', 'stft_distance', 'mag_distance']
+        #self.metrics = ['l2_distance', 'stft_distance', 'mag_distance']
         
         if self.args.eval_speech_rt60:
             global RT60_ESTIMATOR
@@ -299,12 +305,17 @@ class BaseAVModel(pl.LightningModule):
             
             pred_spec, tgt_spec = eval_stft(pred_wav[:, 0]), eval_stft(tgt_wav[:, 0])
             #pred_spec_r, tgt_spec_r = eval_stft(pred_wav[:, 1]), eval_stft(tgt_wav[:, 1])
-            stats['stft_distance'] = (pred_spec - tgt_spec).pow(2).sum((1, 2, 3)).sqrt()
+            #stats['stft_distance'] = (pred_spec - tgt_spec).pow(2).sum((1, 2, 3)).sqrt()
+            stats['stft_distance'] = F.mse_loss(pred_spec, tgt_spec)
 
         if 'mag_distance' in self.metrics:
+            #print(pred_wav.shape)
             pred_spec_l, tgt_spec_l = eval_mag(pred_wav[:, 0]), eval_mag(tgt_wav[:, 0])
+            #print(pred_spec_l.shape)
             #pred_spec_r, tgt_spec_r = eval_mag(pred_wav[:, 1]), eval_mag(tgt_wav[:, 1])
-            stats['mag_distance'] = (pred_spec_l - tgt_spec_l).pow(2).sum((1, 2)).sqrt()
+            #stats['mag_distance'] = (pred_spec_l - tgt_spec_l).pow(2).sum((1, 2)).sqrt()
+            stats['mag_distance'] = F.mse_loss(pred_spec_l, tgt_spec_l)
+            #print(stats['mag_distance'])
 
         if 'lr_ratio' in self.metrics:
             pred_lr_ratio = 10 * torch.log10(pred_wav[:, 0].pow(2).sum(-1) / (pred_wav[:, 1].pow(2).sum(-1) + 1e-5))
@@ -378,6 +389,8 @@ class BaseAVModel(pl.LightningModule):
         for metric in metrics:
             avg_value = torch.concat([output[metric].unsqueeze(-1) for output in gathered_outputs], dim=1).mean()
             self.logger.experiment.add_scalar(f'val/{metric}', avg_value, self.current_epoch)
+            print("CURRENT EPOCH HERE:")
+            print(self.current_epoch)
             output_str += f'{metric}: {avg_value:.4f}, '
 
             # manually save the best model

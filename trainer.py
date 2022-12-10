@@ -188,6 +188,10 @@ parser.add_argument("--use-dereverb-sspeech", default=False, action='store_true'
 parser.add_argument("--eval-speech-rt60", default=True, action='store_true')
 parser.add_argument("--use-pretrained-rt60-predictor", default=False, action='store_true')
 parser.add_argument("--use-frozen-dereverb", default=False, action='store_true')
+parser.add_argument("--use-vida", default=False, action='store_true')
+parser.add_argument("--eval-clean", default=False, action='store_true')
+parser.add_argument("--randomize-input", default=False, action='store_true')
+parser.add_argument("--use-audio-da", default=False, action='store_true')
 
 
 def seed_worker(worker_id):
@@ -220,6 +224,11 @@ def main():
 
     if args.visualize:
         args.audio_len = 40960
+
+    if args.eval_clean:
+        #assert args.dataset == "avspeech"
+        args.use_frozen_dereverb = False
+        args.use_librispeech = True
 
     if args.fast_dev_run:
         if os.path.exists('data/models/debug'):
@@ -262,6 +271,9 @@ def run(args):
     elif args.dataset == 'soundspaces':
         from novas.datasets.ss_speech_dataset import SoundSpacesSpeechDataset
         dataset = SoundSpacesSpeechDataset
+    elif args.dataset == 'avspeech':
+        from novas.datasets.avspeech_dataset import AVSpeechDataset
+        dataset = AVSpeechDataset
     else:
         raise ValueError
 
@@ -275,6 +287,8 @@ def run(args):
                             use_frozen_dereverb=args.use_frozen_dereverb)
         test_dataset = torch.utils.data.DataLoader(test_set, num_workers=1, batch_size=args.batch_size,
                                                    pin_memory=True, persistent_workers=True, worker_init_fn=seed_worker)
+        print("NUM TEST FILES:")
+        print(len(test_dataset))
     else:
         train_set = dataset(split='train', use_rgb=True, use_depth=True, hop_length=args.hop_length,
                             remove_oov=args.remove_oov,
@@ -285,8 +299,10 @@ def run(args):
                             use_frozen_dereverb=args.use_frozen_dereverb)
         train_dataset = torch.utils.data.DataLoader(train_set, shuffle=True, num_workers=args.num_worker,
                                                     pin_memory=True, batch_size=args.batch_size, persistent_workers=True)
+        print("NUM TRAIN FILES:")
+        print(len(train_dataset))
         
-        val_set = dataset(split='val-mini', use_rgb=True, use_depth=True, hop_length=args.hop_length,
+        val_set = dataset(split='val', use_rgb=True, use_depth=True, hop_length=args.hop_length,
                             remove_oov=args.remove_oov,
                             deterministic_eval=True, use_librispeech=args.use_librispeech,
                             convolve_random_rir=args.convolve_random_rir, use_da=args.use_da,
@@ -295,6 +311,8 @@ def run(args):
                             use_frozen_dereverb=args.use_frozen_dereverb)
         val_dataset = torch.utils.data.DataLoader(val_set, num_workers=args.num_worker, batch_size=args.batch_size,
                                                   pin_memory=True, persistent_workers=True)
+        print("NUM VAL FILES:")
+        print(len(val_dataset))
 
     if args.model == 'avitar':
         model = AViTAr(args)
@@ -381,7 +399,7 @@ def run(args):
         if model.learnable:
             model.load_weights(torch.load(args.from_pretrained, map_location='cpu'))
         trainer.test(model, dataloaders=test_dataset)
-        # model.save_test_stats()
+        model.save_test_stats()
     elif args.test_all:
         args.eval_best = False
         ckpt_paths = sorted(glob.glob(os.path.join(args.model_dir, args.version, f'novas_epoch=*.ckpt')))
@@ -420,6 +438,7 @@ def generate_qual(args, model, dataset):
     for i, batch in enumerate(dataset):
         output = model.audio_synthesis(batch, i, phase='test')
         pred, tgt = output['pred'], output['tgt']
+        print(pred.max())
 
         wav_dict = {
             'pred': pred if args.decode_wav else model.spec2wav(pred, batch['src_wav']),
@@ -507,7 +526,14 @@ def generate_qual(args, model, dataset):
             count += 1
 
         webify(qual_dir, args.version)
-        target_file = f'qual_htmls/{args.version}.html'
+
+        html_short_dir = args.model_dir.split("/")[-1]
+        html_dir = os.path.join("qual_htmls", html_short_dir)
+        os.makedirs(html_dir, exist_ok=True)
+        target_file = f'{html_dir}/{args.version}.html'
+
+        print(target_file)
+        print(args.use_librispeech)
         if os.path.exists(target_file):
             os.remove(target_file)
         os.symlink(os.path.join(os.path.abspath(qual_dir), 'index.html'), target_file)

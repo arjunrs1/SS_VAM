@@ -47,8 +47,7 @@ class SoundSpacesSpeechDataset(Dataset):
         self.deterministic_eval = deterministic_eval
         self.use_dereverb_sspeech = use_dereverb_sspeech
         self.use_frozen_dereverb = use_frozen_dereverb
-        print("NUM FILES:")
-        print(len(self.files))
+        self.use_librispeech = use_librispeech
 
         if remove_oov:
             tgt_file = os.path.join('data/soundspaces_speech/remove_oov', split + '.pkl')
@@ -71,6 +70,10 @@ class SoundSpacesSpeechDataset(Dataset):
                     print(f'Write to file {tgt_file}')
             print(f"Number of files after removing out-of-view cases: {len(self.files)}")
 
+        problem_file = "data/soundspaces_speech/test-unseen/UwV83HsGsw3/5142-33396-0005.pkl"
+        if problem_file in self.files:
+            self.files.remove(problem_file)
+
     def __len__(self):
         return len(self.files)
         # TODO: need to fix the length
@@ -87,8 +90,15 @@ class SoundSpacesSpeechDataset(Dataset):
         rir = data['rir']
         distance = data['geodesic_distance']
 
+        #print(source_audio.shape)
+        #print(receiver_audio)
         src_wav, recv_wav = self.process_audio(source_audio, receiver_audio)
 
+        #if len(recv_wav) != 40960:
+        #    print(file)
+
+        #print(src_wav.shape)
+        #print(recv_wav.shape)
         sample = dict()
         if self.use_dereverb_sspeech:
             sample['src_wav'] = recv_wav
@@ -151,6 +161,11 @@ class SoundSpacesSpeechDataset(Dataset):
                     else:
                         sample[visual_sensor] = torchvision.transforms.Resize((192, 576))(sample[visual_sensor])
 
+        #sample['src_rgb'] = torch.ones(sample['src_rgb'].shape)
+        #sample['src_depth'] = torch.ones(sample['src_depth'].shape)
+        #for elem in sample.keys():
+        #    print(elem)
+        #    print(sample[elem].shape)
         return sample
     
     def process_audio(self, source_audio, receiver_audio, use_start=False):
@@ -162,23 +177,52 @@ class SoundSpacesSpeechDataset(Dataset):
             source_audio = normalize(source_audio, norm='peak')
 
         # pad audio
-        if waveform_length > source_audio.shape[0]:
-            receiver_audio = np.pad(receiver_audio, (0, max(0, waveform_length - receiver_audio.shape[0])))
-            source_audio = np.pad(source_audio, (0, waveform_length - source_audio.shape[0]))
+        if self.use_librispeech:
+            if waveform_length > source_audio.shape[0]:
+                source_audio = np.pad(source_audio, (0, waveform_length - source_audio.shape[0]))
 
-        if (self.deterministic_eval and self.split != 'train') or use_start:
-            start_index = 0
-        else:
-            start_index = np.random.randint(0, source_audio.shape[0] - waveform_length) \
+            if waveform_length > receiver_audio.shape[0]:
+                source_audio = np.pad(receiver_audio, (0, waveform_length - receiver_audio.shape[0]))
+
+            if (self.deterministic_eval and self.split != 'train') or use_start:
+                start_index_src = 0
+                start_index_rec = 0
+            else:
+                start_index_src = np.random.randint(0, source_audio.shape[0] - waveform_length) \
                             if source_audio.shape[0] != waveform_length else 0
-        source_clip = source_audio[start_index: start_index + waveform_length]
-        receiver_clip = receiver_audio[start_index: start_index + waveform_length]
 
+                start_index_rec = np.random.randint(0, receiver_audio.shape[0] - waveform_length) \
+                            if receiver_audio.shape[0] != waveform_length else 0
+
+            #start_index_src = 0
+            #start_index_rec = 0
+            source_clip = source_audio[start_index_src: start_index_src + waveform_length]
+            receiver_clip = receiver_audio[start_index_rec: start_index_rec + waveform_length]
+
+        else:
+            if waveform_length > source_audio.shape[0]:
+                receiver_audio = np.pad(receiver_audio, (0, max(0, waveform_length - receiver_audio.shape[0])))
+                source_audio = np.pad(source_audio, (0, waveform_length - source_audio.shape[0]))
+
+            if (self.deterministic_eval and self.split != 'train') or use_start:
+                start_index = 0
+            else:
+                start_index = np.random.randint(0, source_audio.shape[0] - waveform_length) \
+                            if source_audio.shape[0] != waveform_length else 0
+
+            source_clip = source_audio[start_index: start_index + waveform_length]
+            receiver_clip = receiver_audio[start_index: start_index + waveform_length]
+
+        #print(receiver_clip.shape)
         # normalize the short clip
         if self.normalize_segment:
             source_clip = normalize(source_clip, norm='peak')
             receiver_clip = normalize(receiver_clip, norm='peak')
 
+        #print("rec shape")
+        #print(receiver_clip.shape)
+        #print ("src shpe")
+        #print(source_clip.shape)
         return source_clip, receiver_clip
 
 

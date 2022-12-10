@@ -24,17 +24,27 @@ def update_args(args, dic):
     return args
 
 
-def load_dereverberator(device):
-    from trainer import parser
-    pretrained_weights = 'data/pretrained-models/dereverb/best_val.ckpt'
-    state_dict = torch.load(pretrained_weights, map_location='cpu')
-    default_args = parser.parse_args("")
-    update_args(default_args, 
-            vars(state_dict['hparams']))
-    dereverberator = WaveNet(default_args).to(device=device)
-    dereverberator.load_state_dict(state_dict['state_dict'])
-    print(default_args)
-    dereverberator.eval()
+def load_dereverberator(device, use_vida=False):
+    if use_vida:
+        from novas.vam.models.vida import VIDA
+        from trainer import parser
+        pretrained_weights = 'data/pretrained-models/dereverb/vida.pth'
+        state_dict = torch.load(pretrained_weights, map_location='cpu')
+        default_args = parser.parse_args("")
+        update_args(default_args, {'use_rgb': False, 'use_depth': False, 'log1p': True, 'decode_wav': True, 'dereverb': True})
+        dereverberator = VIDA(default_args).to(device=device)
+        dereverberator.load_weights(state_dict)
+        dereverberator.eval()
+    else:
+        from trainer import parser
+        pretrained_weights = 'data/pretrained-models/dereverb/best_val.ckpt'
+        state_dict = torch.load(pretrained_weights, map_location='cpu')
+        default_args = parser.parse_args("")
+        update_args(default_args, 
+                vars(state_dict['hparams']))
+        dereverberator = WaveNet(default_args).to(device=device)
+        dereverberator.load_state_dict(state_dict['state_dict'])
+        dereverberator.eval()
 
     return dereverberator
 
@@ -51,10 +61,11 @@ class WaveNet(BaseAVModel):
         if args.encode_sincos:
             non_learnable_feat_dim += sum([args.use_tgt_pose, args.use_speaker_pose, args.use_tgt_rotation, args.use_speaker_pose_wrt_tgt])
         view_dim = 256 if args.use_rgb or args.mlp_fusion else non_learnable_feat_dim
+        view_dim = 256 if view_dim == 0 else view_dim
+        self.view_dim = view_dim
         wavenet_blocks = args.wavenet_blocks
         layers_per_block = args.layers_per_block
         wavenet_channels = 64
-
         if args.use_rgb or args.use_tgt_rgb or args.use_tgt_rgb_pano:
             layers = list(torchvision.models.resnet18(pretrained=True).children())[0:-2]
             if args.use_depth:
@@ -65,7 +76,7 @@ class WaveNet(BaseAVModel):
             self.conv1x1 = create_conv(512, 8, 1, 0)
 
             input_dim = 512 * (args.use_rgb + args.use_tgt_rgb) + 864 * args.use_tgt_rgb_pano + non_learnable_feat_dim
-            input_dim = 864
+            input_dim = 864 #480
             self.fusion = nn.Sequential(
                 nn.Linear(input_dim, 512),
                 nn.ReLU(),
@@ -132,9 +143,13 @@ class WaveNet(BaseAVModel):
 
         self.first_val = True
         self.configure_loss()
-        self.metrics = ['stft_distance', 'mag_distance', 'delay', 'lr_ratio', 'lr_ratio_peak', 'l2_distance']
+        if args.use_librispeech and args.eval_clean:
+            self.metrics = []
+        else:
+            self.metrics = ['stft_distance', 'mag_distance', 'l2_distance']
         self.speech_metric_names = {'stoi', 'sisdr', 'bsseval', 'mosnet'}.intersection(self.metrics)
         self.speech_metrics = speechmetrics.load(self.speech_metric_names, window=None)
+
 
     def compute_visual_feat(self, rgb):
         feat = self.visual_encoder(rgb)
@@ -144,7 +159,7 @@ class WaveNet(BaseAVModel):
     def forward(self, batch):
         features = []
         if self.args.use_rgb:
-            if self.args.use_depth:
+            if self.args.use_depth: 
                 rgbd = torch.cat((batch['src_depth'], batch['src_rgb']),1)
                 features.append(self.compute_visual_feat(rgbd))
             else:
@@ -175,10 +190,13 @@ class WaveNet(BaseAVModel):
         if self.args.use_tgt_location:
             features.append(batch['tgt_location'])
 
-        print(features[0].shape)
-        print(features[1].shape)
-        features = self.fusion(torch.concat(features, dim=1))
-        print(features.shape)
+        if (self.args.use_rgb == False) and (self.args.use_depth == False):
+            if len(batch['src_wav'].shape) != 2:
+                batch['src_wav'] = torch.unsqueeze(batch['src_wav'], 0)
+            features = torch.ones((batch['src_wav'].shape[0],self.view_dim)).to(self.device)
+            features = self.fusion(features)
+        else:
+            features = self.fusion(torch.concat(features, dim=1))
 
         x = batch['src_wav']
         if self.args.use_warper:
@@ -214,9 +232,19 @@ class WaveNet(BaseAVModel):
         for key, value in batch.items():
             batch[key] = value.to(device=self.device, dtype=torch.float)
 
+        if self.args.randomize_input:
+            batch['src_wav'] = torch.roll(batch['src_wav'], shifts=1, dims=0)
+
+        #if dereverberation flaggged, perform dereverberation
         if self.args.use_frozen_dereverb:
-            dereverb_sspeech(batch, self.args.encode_wav, self.device)
+            dereverb_sspeech(batch, self.args.encode_wav, self.args.randomize_input, self.device, use_vida=self.args.use_vida)
         batch['original_src_wav'] = batch['src_wav']
+
+        if self.args.convolve_random_rir:
+            convolve_random_rir(batch)
+
+        if self.args.use_audio_da:
+            apply_audio_data_augmentation(self.args, batch, phase)
         
         pred_wav, intermediate_wav, scale = self.forward(batch)
 
@@ -307,13 +335,53 @@ class WaveNet(BaseAVModel):
 
         return stats
 
-def dereverb_sspeech(batch, encode_wav, device):
+def dereverb_sspeech(batch, encode_wav, randomize_input, device, use_vida=False):
     with torch.no_grad():
         global DEREVERBERATOR
         if DEREVERBERATOR is None:
-            DEREVERBERATOR = load_dereverberator(device)
-        pred_clean = DEREVERBERATOR.audio_synthesis(batch, 0)['pred']
+            DEREVERBERATOR = load_dereverberator(device, use_vida)
+        
+        if randomize_input:
+            original_rgb = batch['src_rgb']
+            original_depth = batch['src_depth']
+            batch['src_rgb'] = torch.roll(batch['src_rgb'], shifts=1, dims=0)
+            batch['src_depth'] = torch.roll(batch['src_depth'], shifts=1, dims=0)
+        if use_vida:
+            pred_clean = DEREVERBERATOR.dereverb(batch, 0)['pred']
+        else:
+            pred_clean = DEREVERBERATOR.audio_synthesis(batch, 0)['pred']
+        if randomize_input:
+            #restore original rgb tensor for use in reverberation model later
+            batch['src_rgb'] = original_rgb
+            batch['src_depth'] = original_depth
         if encode_wav:
             batch['src_wav'] = torch.squeeze(pred_clean[:, :batch['tgt_wav'].shape[1]])
         else:
             batch['src_wav'] = pred_clean
+
+def convolve_random_rir(batch):
+    rirs = torch.flip(batch['rir'], (1,)).unsqueeze(1)
+    outputs = []
+    for i in range(batch['src_wav'].shape[0]):
+        rir = rirs[i: i + 1]
+        audio = batch['src_wav'].unsqueeze(1)[i:i + 1]
+        outputs.append(torch.nn.functional.conv1d(audio, rir, padding=rir.shape[-1] - 1))
+    outputs = torch.cat(outputs, dim=0).squeeze(1)
+    batch['src_wav'] = outputs[:, :batch['tgt_wav'].shape[1]].detach()
+    batch['src_wav'] /= batch['src_wav'].abs().max(dim=1, keepdim=True)[0]
+    batch['src_wav'] = torch.nan_to_num(batch['src_wav'])
+    return batch
+
+def apply_audio_data_augmentation(args, batch, phase):
+    from torch_audiomentations import Compose, PolarityInversion, AddColoredNoise
+
+    transforms = []
+    transforms.append(AddColoredNoise(p=1, min_snr_in_db=args.min_snr, max_snr_in_db=args.max_snr))
+    transforms.append(PolarityInversion(p=0.5))
+    
+    # Initialize augmentation callable
+    if len(transforms) != 0:
+        apply_augmentation = Compose(transforms=transforms)
+        prev_shape = batch['src_wav'].shape
+        batch['src_wav'] = apply_augmentation(batch['src_wav'].unsqueeze(1), sample_rate=16000).squeeze(1)
+        assert batch['src_wav'].shape == prev_shape, (batch['src_wav'].shape, prev_shape)

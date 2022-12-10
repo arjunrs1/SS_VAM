@@ -38,6 +38,39 @@ class VIDA(BaseAVModel):
 
         return prediction
 
+    def dereverb(self, batch, batch_idx):
+            for key, value in batch.items():
+                batch[key] = value.to(device=self.device, dtype=torch.float)
+            if self.use_visual:
+                rgb, depth = batch['rgb'], batch['depth']
+            else:
+                rgb, depth = None, None
+
+            # inputs = batch['recv_spec'].permute(0, 3, 1, 2) # use two channel inputs
+            recv_spec = self.wav2spec(batch['tgt_wav']).permute(0, 3, 1, 2)
+            if self.args.decode_wav:
+                tgt = batch['src_wav']
+                pred = self.forward(recv_spec, rgb, depth)
+                pred = torch.cat([torch.exp(pred[:, 0:1, :, :].clone()) - 1, pred[:, 1:2, :, :]], dim=1)
+                full_spec = torch.zeros_like(recv_spec, device=self.device)
+                full_spec[:, :, :-1, :-1] = pred
+                pred = griffinlim(full_spec[:, 0, ...], full_spec[:, 1, ...],
+                              torch.hamming_window(400, device=full_spec.device), n_fft=512, hop_length=160,
+                              win_length=400, power=1, n_iter=30).to(self.device)
+            else:
+                tgt = self.wav2spec(batch['src_wav']).permute(0, 3, 1, 2)
+                pred = self.forward(recv_spec, rgb, depth)[:, 0, :, :]
+                tgt = tgt[:, 0, :, :]
+                pred = torch.cat([pred, torch.zeros_like(pred[:, 0:1, :])], dim=1)
+                pred = torch.cat([pred, torch.zeros_like(pred[:, :, 0:1])], dim=2)
+                assert pred.shape == tgt.shape, (pred.shape, tgt.shape)
+
+                pred = pred.permute(0, 2, 1)
+                tgt = tgt.permute(0, 2, 1)
+
+            return {'pred': pred, 'tgt': tgt}
+
+
 class Predictor(nn.Module):
     def __init__(self, input_channel=2, use_rgb=False, use_depth=False, use_seg=False, no_mask=False,
                  limited_fov=False, crop=False, normalize=False, mean_pool_visual=False, use_rgbd=False):
@@ -175,6 +208,7 @@ class AudioNet(nn.Module):
         self.use_visual = use_visual
         self.no_mask = no_mask
         self.normalize = normalize
+        self.use_location = False
 
         num_intermediate_feature = 512
         if use_visual:
