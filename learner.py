@@ -55,6 +55,9 @@ def load_dereverberator(device):
   default_args = parser.parse_args("")
   update_args(default_args, 
           vars(state_dict['hparams']))
+  setattr(default_args, "randomize_input", False)
+  setattr(default_args, "use_frozen_dereverb", False)
+  setattr(default_args, "use_audio_da", False)
   dereverberator = WaveNet(default_args).to(device=device)
   dereverberator.load_state_dict(state_dict['state_dict'])
   dereverberator.eval()
@@ -78,7 +81,7 @@ class DiffWaveLearner:
     self.is_master = True
     self.best_val_loss = np.inf
     self.use_frozen_dereverb = use_frozen_dereverb
-    #self.device = device
+    self.device = device
     self.sr = 16000
 
     mel_args = {

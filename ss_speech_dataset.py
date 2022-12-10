@@ -105,7 +105,7 @@ class SoundSpacesSpeechDataset(Dataset):
             sample['spectrogram'] = data['receiver_spectrogram'].T
         elif self.use_frozen_dereverb:
             sample['src_wav'] = recv_wav
-            sample['tgt_wav'] = src_wav
+            sample['tgt_wav'] = recv_wav
             sample['spectrogram'] = data['receiver_spectrogram'].T
         else:
             sample['src_wav'] = src_wav
