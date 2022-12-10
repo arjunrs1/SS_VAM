@@ -18,7 +18,7 @@ import os
 import random
 import torch
 import torch.nn as nn
-#import torchaudio.transforms as TT
+
 
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.tensorboard import SummaryWriter
@@ -95,7 +95,8 @@ class DiffWaveLearner:
             'power': 1.0,
             'normalized': True,
         }
-    #self.mel_spec_transform = TT.MelSpectrogram(**mel_args).to(device)
+    import torchaudio.transforms as TT
+    self.mel_spec_transform = TT.MelSpectrogram(**mel_args).to(device)
 
 
     beta = np.array(self.params.noise_schedule)
@@ -204,7 +205,7 @@ class DiffWaveLearner:
     if self.use_frozen_dereverb:
             dereverb_sspeech(features, self.device)
 
-    #self.compute_spectrogram(features)
+    self.compute_spectrogram(features)
 
     input_audio = features['src_wav']
     tgt_audio = features['tgt_wav']
@@ -248,6 +249,8 @@ class DiffWaveLearner:
     with torch.no_grad():
       audio = features['src_wav']
       audio = torch.clamp(audio, -1.0, 1.0)
+      #print(features['spectrogram'].shape)
+      #spectrogram = torch.ones(features['spectrogram'].shape)
       spectrogram = self.mel_spec_transform(audio)
       spectrogram = 20 * torch.log10(torch.clamp(spectrogram, min=1e-5)) - 20
       spectrogram = torch.clamp((spectrogram + 100) / 100, 0.0, 1.0)
