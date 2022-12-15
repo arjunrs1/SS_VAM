@@ -17,7 +17,7 @@ def parse_args():
 
 
 def create_html(path, f, name):
-    path = os.path.join('/vision/asomaya1/vam_mod/audio_synthesis-main', path)
+    path = os.path.join('/vision/asomaya1/vam_mod/audio_synthesis_main', path)
     f.write('''<div align = "center">''')
 
     audio_sec = """

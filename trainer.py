@@ -438,7 +438,6 @@ def generate_qual(args, model, dataset):
     for i, batch in enumerate(dataset):
         output = model.audio_synthesis(batch, i, phase='test')
         pred, tgt = output['pred'], output['tgt']
-        print(pred.max())
 
         wav_dict = {
             'pred': pred if args.decode_wav else model.spec2wav(pred, batch['src_wav']),
@@ -532,8 +531,7 @@ def generate_qual(args, model, dataset):
         os.makedirs(html_dir, exist_ok=True)
         target_file = f'{html_dir}/{args.version}.html'
 
-        print(target_file)
-        print(args.use_librispeech)
+
         if os.path.exists(target_file):
             os.remove(target_file)
         os.symlink(os.path.join(os.path.abspath(qual_dir), 'index.html'), target_file)

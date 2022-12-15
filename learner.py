@@ -19,6 +19,8 @@ import random
 import torch
 import torch.nn as nn
 
+from pyroomacoustics.experimental.rt60 import measure_rt60
+
 
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.tensorboard import SummaryWriter
@@ -30,6 +32,7 @@ from model import DiffWave
 from params import AttrDict
 
 DEREVERBERATOR = None
+RT60_ESTIMATOR = None
 
 
 def _nested_map(struct, map_fn):
@@ -45,6 +48,14 @@ def update_args(args, dic):
   for key, value in dic.items():
       setattr(args, key, value)
   return args
+
+def load_rt60_estimator(device):
+    from novas.models.visual_net import VisualNet
+    rt60_estimator = VisualNet(use_rgb=False, use_depth=False, use_audio=True)
+    pretrained_weights = 'data/pretrained-models/rt60_estimator.pth'
+    rt60_estimator.load_state_dict(torch.load(pretrained_weights, map_location='cpu')['predictor'])
+    rt60_estimator.to(device=device).eval()
+    return rt60_estimator
 
 def load_dereverberator(device):
   from trainer import parser
@@ -66,13 +77,14 @@ def load_dereverberator(device):
 
 
 class DiffWaveLearner:
-  def __init__(self, model_dir, model, dataset, valid_dataset, optimizer,
-   params, device, use_frozen_dereverb=False, *args, **kwargs):
+  def __init__(self, model_dir, model, dataset, valid_dataset, test_dataset, optimizer,
+   params, device, use_frozen_dereverb=False, use_rt60_feature=False, *args, **kwargs):
     os.makedirs(model_dir, exist_ok=True)
     self.model_dir = model_dir
     self.model = model
     self.dataset = dataset
     self.valid_dataset = valid_dataset
+    self.test_dataset = test_dataset
     self.optimizer = optimizer
     self.params = params
     self.autocast = torch.cuda.amp.autocast(enabled=kwargs.get('fp16', False))
@@ -81,6 +93,7 @@ class DiffWaveLearner:
     self.is_master = True
     self.best_val_loss = np.inf
     self.use_frozen_dereverb = use_frozen_dereverb
+    self.use_rt60_feature = use_rt60_feature
     self.device = device
     self.sr = 16000
 
@@ -98,6 +111,7 @@ class DiffWaveLearner:
     import torchaudio.transforms as TT
     self.mel_spec_transform = TT.MelSpectrogram(**mel_args).to(device)
 
+    self.RT60_ESTIMATOR = load_rt60_estimator(self.device)
 
     beta = np.array(self.params.noise_schedule)
     noise_level = np.cumprod(1 - beta)
@@ -120,11 +134,11 @@ class DiffWaveLearner:
 
   def load_state_dict(self, state_dict, from_pretrained=False):
     if hasattr(self.model, 'module') and isinstance(self.model.module, nn.Module):
-      self.model.module.load_state_dict(state_dict['model'])
+      self.model.module.load_state_dict(state_dict['model'], strict=False)
     else:
-      self.model.load_state_dict(state_dict['model'])
-    self.optimizer.load_state_dict(state_dict['optimizer'])
-    self.scaler.load_state_dict(state_dict['scaler'])
+      self.model.load_state_dict(state_dict['model'], strict=True)
+    #self.optimizer.load_state_dict(state_dict['optimizer'])
+    #self.scaler.load_state_dict(state_dict['scaler'])
     if from_pretrained:
       self.step = 0
     else:
@@ -150,13 +164,32 @@ class DiffWaveLearner:
     except FileNotFoundError:
       return False
   
-  def restore_from_checkpoint(self, filename='weights'):
+  def restore_best_val(self, filename='weights'):
     try:
       checkpoint = torch.load(f'{self.model_dir}/{filename}.pt')
       self.load_state_dict(checkpoint)
       return True
     except FileNotFoundError:
       return False
+
+  def restore_from_checkpoint(self, filename='weights'):
+    try:
+      file_list = os.listdir(self.model_dir)
+      file_list = [file for file in file_list if file.endswith(".pt")]
+      last_save = file_list[-1]
+      checkpoint = torch.load(f'{self.model_dir}/{last_save}')
+      self.load_state_dict(checkpoint)
+      return True
+    except FileNotFoundError:
+      return False
+
+  def estimate_rt60(self, estimator, wav):
+    stft = torch.stft(wav, n_fft=512, hop_length=160, win_length=400, window=torch.hamming_window(400, device=self.device),
+                      pad_mode='constant', return_complex=True)
+    spec = torch.log1p(stft.abs()).unsqueeze(1)
+    with torch.no_grad():
+      estimated_rt60 = estimator(spec)
+    return estimated_rt60
 
   def train(self, max_steps=None):
     device = next(self.model.parameters()).device
@@ -187,7 +220,6 @@ class DiffWaveLearner:
     loss = 0.0
     for features in tqdm(self.valid_dataset, desc=f'Validation Epoch {self.step // len(self.dataset)}') if self.is_master else self.valid_dataset:
         features = _nested_map(features, lambda x: x.to(device) if isinstance(x, torch.Tensor) else x)
-        #with torch.no_grad??
         loss += self.train_step(features, validation=True).item()
     
     self.model.train()
@@ -200,12 +232,16 @@ class DiffWaveLearner:
 
     if validation:
       self.model.eval()
-    
+
+    if self.use_rt60_feature:
+      src_rt60 = self.estimate_rt60(self.RT60_ESTIMATOR, features['src_wav'])
+    else:
+      src_rt60 = None
 
     if self.use_frozen_dereverb:
             dereverb_sspeech(features, self.device)
 
-    self.compute_spectrogram(features)
+    self.compute_spectrogram(features, src_rt60)
 
     input_audio = features['src_wav']
     tgt_audio = features['tgt_wav']
@@ -222,7 +258,7 @@ class DiffWaveLearner:
       noise = torch.randn_like(input_audio)
       noisy_audio = noise_scale_sqrt * input_audio + (1.0 - noise_scale)**0.5 * noise
 
-      predicted = self.model(noisy_audio, t, spectrogram)
+      predicted = self.model(noisy_audio, t, spectrogram, src_rt60)
       loss = self.loss_fn(noise + (input_audio - tgt_audio), predicted.squeeze(1))  #modified loss function!
 
     self.scaler.scale(loss).backward()
@@ -231,6 +267,61 @@ class DiffWaveLearner:
     self.scaler.step(self.optimizer)
     self.scaler.update()
     return loss
+
+  def test(self):
+    device = next(self.model.parameters()).device
+    self.model.eval()
+
+    L1_loss = []
+    RT60_error = []
+    for features in tqdm(self.test_dataset, desc=f'Testing Epoch') if self.is_master else self.test_dataset:
+      features = _nested_map(features, lambda x: x.to(device) if isinstance(x, torch.Tensor) else x)
+      wav_loss, rt60_error, _ = self.test_step(features)
+      #L1_loss += wav_loss.item()
+      L1_loss.append(wav_loss.item())
+      RT60_error.append(rt60_error.item())
+      #RT60_error += rt60_error.item()
+      if torch.isnan(wav_loss).any():
+        raise RuntimeError(f'Detected NaN loss.')
+
+    L1_loss = np.array(L1_loss)
+    RT60_error = np.array(RT60_error)
+    #print("L1_loss:", str(float(L1_loss/len(self.test_dataset))))
+    #print("RT60 Error:", str(float(RT60_error)))
+    #print("RT60 Error:", str(float(RT60_error/len(self.test_dataset))))
+    print("L1_loss:", str(float(L1_loss.mean())))
+    print("RT60 Error:", str(float(RT60_error.mean())))
+    #print("RT60 Error:", str(float(RT60_error/len(self.test_dataset))))
+    return
+
+  def test_step(self, features):
+    from inference import predict
+
+    tgt_rt60 = self.estimate_rt60(self.RT60_ESTIMATOR, features['tgt_wav'].to(self.device))
+
+    if self.use_rt60_feature:
+      src_rt60 = self.estimate_rt60(self.RT60_ESTIMATOR, features['src_wav'].to(self.device))
+    else:
+      src_rt60 = None
+
+    if self.use_frozen_dereverb:
+            dereverb_sspeech(features, self.device)
+
+    self.compute_spectrogram(features, src_rt60)
+
+    input_audio = features['src_wav']
+    tgt_audio = features['tgt_wav']
+    spectrogram = features['spectrogram']
+
+    pred, sr = predict(spectrogram, src_rt60, model_dir=self.model_dir, params=self.params, device=self.device)
+    pred_rt60 = self.estimate_rt60(self.RT60_ESTIMATOR, pred)
+
+    L1_loss = self.loss_fn(input_audio, pred)
+    RT60_error = (pred_rt60 - tgt_rt60).abs().mean().cpu().numpy()
+
+    return L1_loss, RT60_error, pred
+
+
 
   def _write_summary(self, epoch, features, loss, val_loss):
     writer = self.summary_writer or SummaryWriter(self.model_dir, purge_step=epoch)
@@ -245,12 +336,10 @@ class DiffWaveLearner:
     writer.flush()
     self.summary_writer = writer
 
-  def compute_spectrogram(self, features):
+  def compute_spectrogram(self, features, rt60_feature=None):
     with torch.no_grad():
       audio = features['src_wav']
       audio = torch.clamp(audio, -1.0, 1.0)
-      #print(features['spectrogram'].shape)
-      #spectrogram = torch.ones(features['spectrogram'].shape)
       spectrogram = self.mel_spec_transform(audio)
       spectrogram = 20 * torch.log10(torch.clamp(spectrogram, min=1e-5)) - 20
       spectrogram = torch.clamp((spectrogram + 100) / 100, 0.0, 1.0)
@@ -263,18 +352,26 @@ class DiffWaveLearner:
       
 
 
-def _train_impl(replica_id, model, dataset, valid_dataset, args, params, device=None):
+def _train_impl(replica_id, model, dataset, valid_dataset, test_dataset, args, params, device=None):
   torch.backends.cudnn.benchmark = True
   opt = torch.optim.Adam(model.parameters(), lr=params.learning_rate)
 
-  learner = DiffWaveLearner(args.model_dir, model, dataset, valid_dataset,
-   opt, params, use_frozen_dereverb=args.use_frozen_dereverb, fp16=args.fp16, device=device)
+  learner = DiffWaveLearner(args.model_dir, model, dataset, valid_dataset, test_dataset, 
+  opt, params, use_frozen_dereverb=args.use_frozen_dereverb, use_rt60_feature=args.use_rt60_feature,
+  fp16=args.fp16, device=device)
   learner.is_master = (replica_id == 0)
-  if args.use_pretrained:
-    learner.restore_from_pretrained()
+  if not args.test and not args.visualize:
+    if args.use_pretrained and not os.path.exists(os.path.join(args.model_dir, "weights.pt")):
+      learner.restore_from_pretrained()
+    else:
+      learner.restore_from_checkpoint()
+    learner.train(max_steps=args.max_steps)
   else:
-    learner.restore_from_checkpoint()
-  learner.train(max_steps=args.max_steps)
+    learner.restore_best_val()
+    if args.test:
+      learner.test()
+    if args.visualize:
+      generate_qual(args, learner, test_dataset)
 
 
 def train(args, params):
@@ -283,9 +380,13 @@ def train(args, params):
   else:
     dataset = from_path(args, params, split=args.split)
     valid_dataset = from_path(args, params, split="val")
-  
-  model = DiffWave(params).cuda()
-  _train_impl(0, model, dataset, valid_dataset, args, params)
+    test_dataset = from_path(args, params, split=args.test_split)
+
+  device = torch.device('cuda:0')
+  torch.cuda.set_device(device)
+  #model = DiffWave(params, args.use_rt60_feature).cuda()
+  model = DiffWave(params, args.use_rt60_feature).to(device)
+  _train_impl(0, model, dataset, valid_dataset, test_dataset, args, params, device=device)
 
 
 def train_distributed(replica_id, replica_count, port, args, params):
@@ -297,11 +398,12 @@ def train_distributed(replica_id, replica_count, port, args, params):
   else:
     dataset = from_path(args, params, split=args.split, is_distributed=True)
     valid_dataset = from_path(args, params, split="val", is_distributed=True)
+    test_dataset = from_path(args, params, split=args.test_split, is_distributed=True)
   device = torch.device('cuda', replica_id)
   torch.cuda.set_device(device)
-  model = DiffWave(params).to(device)
-  model = DistributedDataParallel(model, device_ids=[replica_id])
-  _train_impl(replica_id, model, dataset, valid_dataset, args, params, device)
+  model = DiffWave(params, args.use_rt60_feature).to(device)
+  model = DistributedDataParallel(model, device_ids=[replica_id], find_unused_parameters=True)
+  _train_impl(replica_id, model, dataset, valid_dataset, test_dataset, args, params, device)
 
 def dereverb_sspeech(features, device, randomize_input=False, use_vida=False, encode_wav=True):
   with torch.no_grad():
@@ -326,3 +428,132 @@ def dereverb_sspeech(features, device, randomize_input=False, use_vida=False, en
           features['src_wav'] = torch.squeeze(pred_clean[:, :features['tgt_wav'].shape[1]])
       else:
           features['src_wav'] = pred_clean
+
+def measure_rt60_wrapper(x, sr=16000, decay_db=30):
+    rt60 = -1
+    while rt60 == -1:
+        try:
+            rt60 = measure_rt60(x, sr, decay_db)
+        except ValueError:
+            if decay_db > 10:
+                decay_db -= 10
+            else:
+                rt60 = x.shape[0]
+
+    return rt60
+
+def generate_qual(args, model, dataset):
+    import json
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from scipy.io import wavfile
+    from librosa.display import waveshow
+    from as_scripts.webify import webify
+
+    qual_dir = os.path.join(args.model_dir, "qual")
+    os.makedirs(qual_dir, exist_ok=True)
+    count = 0
+    
+    for i, batch in enumerate(dataset):
+        device = next(model.model.parameters()).device
+        _, _, pred = model.test_step(batch)
+
+        wav_dict = {
+            'pred': pred,
+            'tgt': batch['tgt_wav'],
+            'input': batch['src_wav']
+        }
+        spec_dict = {}
+        for key in wav_dict:
+            wav = wav_dict[key].reshape(-1, wav_dict[key].shape[-1])
+            spec = torch.log1p(torch.stft(wav, n_fft=512, hop_length=160, win_length=400,
+                               window=torch.hamming_window(400, device=wav_dict[key].device), pad_mode='constant',
+                               center=True, return_complex=True).abs())
+            spec = spec[:, :spec.shape[1]//2, :]
+            spec_dict[key] = spec.reshape(pred.shape[0], -1, *spec.shape[1:])
+
+        for dic in [wav_dict, spec_dict]:
+            for key, val in dic.items():
+                dic[key] = val.cpu().numpy()
+
+        for j in tqdm(range(pred.shape[0])):
+            y_limit = max([np.abs(wav[j]).max() for wav in wav_dict.values()]) + 0.03
+            audio_duration = wav_dict['input'].shape[-1] / args.sample_rate
+            #step = 0.2 if args.audio_len == 16000 else 0.5
+            step = 0.5
+            x_ticks = np.arange(step, audio_duration, step=step)
+
+            for k in range(1):
+                fig, axes = plt.subplots(2, 3)
+                axes[0][0].imshow(np.squeeze(spec_dict['input'][j]))
+                axes[0][0].set_aspect(1 / axes[0][0].get_data_ratio())
+                axes[0][0].invert_yaxis()
+                axes[0][0].set_title('Input')
+
+                plt.sca(axes[1][0])
+                waveshow(wav_dict['input'][j], args.sample_rate)
+                axes[1][0].set_ylim(-y_limit, y_limit)
+                axes[1][0].set_xticks(x_ticks)
+
+                axes[0][1].imshow(np.squeeze(spec_dict['pred'][j]))
+                axes[0][1].set_aspect(1 / axes[0][1].get_data_ratio())
+                axes[0][1].invert_yaxis()
+                axes[0][1].set_title('Prediction')
+
+                plt.sca(axes[1][1])
+                waveshow(wav_dict['pred'][j], args.sample_rate)
+                axes[1][1].set_ylim(-y_limit, y_limit)
+                axes[1][1].set_xticks(x_ticks)
+
+                axes[0][2].imshow(np.squeeze(spec_dict['tgt'][j]))
+                axes[0][2].set_aspect(1 / axes[0][2].get_data_ratio())
+                axes[0][2].invert_yaxis()
+                axes[0][2].set_title('Target')
+
+                plt.sca(axes[1][2])
+                waveshow(wav_dict['tgt'][j], args.sample_rate)
+                axes[1][2].set_ylim(-y_limit, y_limit)
+                axes[1][2].set_xticks(x_ticks)
+
+                fig.tight_layout()
+                plt.savefig(os.path.join(qual_dir, f"{count}-plot.png"))
+                plt.close(fig)
+
+            if 'src_rgb' in batch:
+                rgb = batch['src_rgb']
+                rgb = rgb.cpu()[j].permute(1, 2, 0).clip(0, 1).numpy()  # L/R channels are displayed separately
+                plt.imsave(os.path.join(qual_dir, f'{count}-src-rgb.png'), rgb)
+            if 'tgt_rgb' in batch:
+                rgb = batch['tgt_rgb']
+                rgb = rgb.cpu()[j].permute(1, 2, 0).clip(0, 1).numpy()
+                #if args.use_tgt_bboxes_as_mask:
+                #    plt.imsave(os.path.join(qual_dir, f'{count}-tgt-rgb-mask.png'), rgb[:, :, 3])
+                #    rgb = rgb[:, :, :3]
+                plt.imsave(os.path.join(qual_dir, f'{count}-tgt-rgb.png'), rgb)
+
+            wavfile.write(os.path.join(qual_dir, f'{count}-input.wav'), args.sample_rate, wav_dict['input'][j].T)
+            wavfile.write(os.path.join(qual_dir, f'{count}-tgt.wav'), args.sample_rate, wav_dict['tgt'][j].T)
+            wavfile.write(os.path.join(qual_dir, f'{count}-pred.wav'), args.sample_rate, wav_dict['pred'][j].T)
+            if 'tgt_pose' in batch:
+                with open(os.path.join(qual_dir, f'{count}-tgt-pose.json'), 'w') as fo:
+                    pose = batch['tgt_pose'].cpu()[j].numpy()
+                    json.dump({'theta': float(np.rad2deg(pose[1])), 'distance': float(pose[0])}, fo)
+            if 'speaker_pose' in batch:
+                with open(os.path.join(qual_dir, f'{count}-speaker-pose.json'), 'w') as fo:
+                    pose = batch['speaker_pose'].cpu()[j].numpy()
+                    json.dump({'theta': float(np.rad2deg(pose[1])), 'distance': float(pose[0])}, fo)
+            count += 1
+
+        webify(qual_dir, version="v1")
+
+        html_short_dir = args.model_dir.split("/")[-1]
+        html_dir = os.path.join("qual_htmls", html_short_dir)
+        os.makedirs(html_dir, exist_ok=True)
+        target_file = f'{html_dir}/v1.html'
+
+
+        if os.path.exists(target_file):
+            os.remove(target_file)
+        os.symlink(os.path.join(os.path.abspath(qual_dir), 'index.html'), target_file)
+        if count > 31:
+            break

@@ -27,23 +27,23 @@ from model import DiffWave
 #Usage:
 #python inference.py --model-dir data/models/diff_test --test-split <TEST_SPLIT> --use-rec-spec <TRUE/FALSE>
 
-models = {}
+#models = {}
 
-def predict(spectrogram=None, model_dir=None, params=None, device=torch.device('cuda'), fast_sampling=False, use_pretrained=False):
+def predict(spectrogram=None, rt60_feature=None, model_dir=None, params=None, device=torch.device('cuda'), fast_sampling=False, use_pretrained=False):
   # Lazy load model.
-  if not model_dir in models:
-    if use_pretrained:
-      checkpoint = torch.load("data/models/diff_test/diffwave-ljspeech-22kHz-1000578.pt")
-    elif os.path.exists(f'{model_dir}/weights.pt'):
-      checkpoint = torch.load(f'{model_dir}/weights.pt')
-    else:
-      checkpoint = torch.load(model_dir)
-    model = DiffWave(AttrDict(base_params)).to(device)
-    model.load_state_dict(checkpoint['model'])
-    model.eval()
-    models[model_dir] = model
+  #if not model_dir in models:
+  if use_pretrained:
+    checkpoint = torch.load("data/models/diff_test/diffwave-ljspeech-22kHz-1000578.pt")
+  elif os.path.exists(f'{model_dir}/weights.pt'):
+    checkpoint = torch.load(f'{model_dir}/weights.pt')
+  else:
+    checkpoint = torch.load(model_dir)
+  model = DiffWave(AttrDict(base_params)).to(device)
+  model.load_state_dict(checkpoint['model'], strict=False)
+  model.eval()
+    #models[model_dir] = model
 
-  model = models[model_dir]
+  #model = models[model_dir]
   model.params.override(params)
   with torch.no_grad():
     # Change in notation from the DiffWave paper for fast sampling.
@@ -78,6 +78,8 @@ def predict(spectrogram=None, model_dir=None, params=None, device=torch.device('
         spectrogram = spectrogram.unsqueeze(0)
       spectrogram = spectrogram.to(device)
       audio = torch.randn(spectrogram.shape[0], model.params.hop_samples * spectrogram.shape[-1], device=device)
+      if rt60_feature is not None:
+        rt60_feature = rt60_feature.to(device)
     else:
       audio = torch.randn(1, params.audio_len, device=device)
     noise_scale = torch.from_numpy(alpha_cum**0.5).float().unsqueeze(1).to(device)
@@ -85,7 +87,7 @@ def predict(spectrogram=None, model_dir=None, params=None, device=torch.device('
     for n in range(len(alpha) - 1, -1, -1):
       c1 = 1 / alpha[n]**0.5
       c2 = beta[n] / (1 - alpha_cum[n])**0.5
-      audio = c1 * (audio - c2 * model(audio, torch.tensor([T[n]], device=audio.device), spectrogram).squeeze(1))
+      audio = c1 * (audio - c2 * model(audio, torch.tensor([T[n]], device=audio.device), spectrogram, rt60_feature).squeeze(1))
       if n > 0:
         noise = torch.randn_like(audio)
         sigma = ((1.0 - alpha_cum[n-1]) / (1.0 - alpha_cum[n]) * beta[n])**0.5

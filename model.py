@@ -86,7 +86,7 @@ class SpectrogramUpsampler(nn.Module):
 
 
 class ResidualBlock(nn.Module):
-  def __init__(self, n_mels, residual_channels, dilation, uncond=False):
+  def __init__(self, n_mels, residual_channels, dilation, uncond=False, use_rt60=False):
     '''
     :param n_mels: inplanes of conv1x1 for spectrogram conditional
     :param residual_channels: audio conv
@@ -95,15 +95,18 @@ class ResidualBlock(nn.Module):
     '''
     super().__init__()
     self.dilated_conv = Conv1d(residual_channels, 2 * residual_channels, 3, padding=dilation, dilation=dilation)
+    self.dilated_conv_rt60 = Conv1d(2 * residual_channels, 2 * residual_channels, 3, padding=dilation, dilation=dilation)
     self.diffusion_projection = Linear(512, residual_channels)
     if not uncond: # conditional model
       self.conditioner_projection = Conv1d(n_mels, 2 * residual_channels, 1)
     else: # unconditional model
       self.conditioner_projection = None
 
+    self.use_rt60 = use_rt60
+
     self.output_projection = Conv1d(residual_channels, 2 * residual_channels, 1)
 
-  def forward(self, x, diffusion_step, conditioner=None):
+  def forward(self, x, diffusion_step, conditioner=None, rt60_feature=None):
     assert (conditioner is None and self.conditioner_projection is None) or \
            (conditioner is not None and self.conditioner_projection is not None)
 
@@ -115,6 +118,11 @@ class ResidualBlock(nn.Module):
       conditioner = self.conditioner_projection(conditioner)
       y = self.dilated_conv(y) + conditioner
 
+
+    if self.use_rt60:
+      rt60_vector = torch.unsqueeze(rt60_feature.expand(-1, y.shape[2]),1).expand(-1, y.shape[1], -1)
+      y = self.dilated_conv_rt60(y) + rt60_vector
+
     gate, filter = torch.chunk(y, 2, dim=1)
     y = torch.sigmoid(gate) * torch.tanh(filter)
 
@@ -124,9 +132,11 @@ class ResidualBlock(nn.Module):
 
 
 class DiffWave(nn.Module):
-  def __init__(self, params):
+  def __init__(self, params, use_rt60=False):
     super().__init__()
     self.params = params
+    self.use_rt60 = use_rt60
+
     self.input_projection = Conv1d(1, params.residual_channels, 1)
     self.diffusion_embedding = DiffusionEmbedding(len(params.noise_schedule))
     if self.params.unconditional: # use unconditional model
@@ -135,14 +145,15 @@ class DiffWave(nn.Module):
       self.spectrogram_upsampler = SpectrogramUpsampler(params.n_mels)
 
     self.residual_layers = nn.ModuleList([
-        ResidualBlock(params.n_mels, params.residual_channels, 2**(i % params.dilation_cycle_length), uncond=params.unconditional)
+        ResidualBlock(params.n_mels, params.residual_channels, 2**(i % params.dilation_cycle_length), uncond=params.unconditional,
+        use_rt60=self.use_rt60)
         for i in range(params.residual_layers)
     ])
     self.skip_projection = Conv1d(params.residual_channels, params.residual_channels, 1)
     self.output_projection = Conv1d(params.residual_channels, 1, 1)
     nn.init.zeros_(self.output_projection.weight)
 
-  def forward(self, audio, diffusion_step, spectrogram=None):
+  def forward(self, audio, diffusion_step, spectrogram=None, rt60_feature=None):
     assert (spectrogram is None and self.spectrogram_upsampler is None) or \
            (spectrogram is not None and self.spectrogram_upsampler is not None)
     x = audio.unsqueeze(1)
@@ -155,7 +166,7 @@ class DiffWave(nn.Module):
 
     skip = None
     for layer in self.residual_layers:
-      x, skip_connection = layer(x, diffusion_step, spectrogram)
+      x, skip_connection = layer(x, diffusion_step, spectrogram, rt60_feature)
       skip = skip_connection if skip is None else skip_connection + skip
 
     x = skip / sqrt(len(self.residual_layers))

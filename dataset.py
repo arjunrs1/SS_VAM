@@ -182,7 +182,7 @@ def from_path(args, params, split="train", is_distributed=False):
     num_workers=0,
     sampler=DistributedSampler(dataset) if is_distributed else None,
     pin_memory=True,
-    drop_last=True)
+    drop_last=True) #check to make sure consistent with WaveNet repo!
 
 
 def from_gtzan(params, is_distributed=False):
