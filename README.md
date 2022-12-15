@@ -1,4 +1,6 @@
-# audio_synthesis
+# Diffusion and WaveNet Visual Acoustic Matching Repo
+
+You will need to create a symlink folder called "data" to "/vision/vision_data/sound-spaces/data/vam/data".
 
 ## Non-visual diffusion model:
 
