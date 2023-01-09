@@ -59,16 +59,12 @@ def load_rt60_estimator(device):
 
 def load_dereverberator(device):
   from trainer import parser
-  parser = ArgumentParser()
   from novas.models.wavenet import WaveNet
   pretrained_weights = 'data/pretrained-models/dereverb/best_val.ckpt'
   state_dict = torch.load(pretrained_weights, map_location='cpu')
   default_args = parser.parse_args("")
   update_args(default_args, 
           vars(state_dict['hparams']))
-  setattr(default_args, "randomize_input", False)
-  setattr(default_args, "use_frozen_dereverb", False)
-  setattr(default_args, "use_audio_da", False)
   dereverberator = WaveNet(default_args).to(device=device)
   dereverberator.load_state_dict(state_dict['state_dict'])
   dereverberator.eval()
@@ -286,12 +282,8 @@ class DiffWaveLearner:
 
     L1_loss = np.array(L1_loss)
     RT60_error = np.array(RT60_error)
-    #print("L1_loss:", str(float(L1_loss/len(self.test_dataset))))
-    #print("RT60 Error:", str(float(RT60_error)))
-    #print("RT60 Error:", str(float(RT60_error/len(self.test_dataset))))
     print("L1_loss:", str(float(L1_loss.mean())))
     print("RT60 Error:", str(float(RT60_error.mean())))
-    #print("RT60 Error:", str(float(RT60_error/len(self.test_dataset))))
     return
 
   def test_step(self, features):

@@ -171,7 +171,8 @@ def from_path(args, params, split="train", is_distributed=False):
       use_depth=True,
       remove_oov=True, 
       deterministic_eval=True,
-      use_dereverb_sspeech=args.use_dereverb_sspeech)
+      use_dereverb_sspeech=args.use_dereverb_sspeech,
+      use_frozen_dereverb=args.use_frozen_dereverb)
 
   #print(os.cpu_count())
   return torch.utils.data.DataLoader(

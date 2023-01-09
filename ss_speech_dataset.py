@@ -174,9 +174,6 @@ class SoundSpacesSpeechDataset(Dataset):
         return sample
     
     def process_audio(self, source_audio, receiver_audio, use_start=False):
-        receiver_audio = normalize(receiver_audio, norm='peak')
-        source_audio = normalize(source_audio, norm='peak')
-        return source_audio, receiver_audio
         # normalize the intensity before padding
         waveform_length = 40960
 
@@ -184,6 +181,8 @@ class SoundSpacesSpeechDataset(Dataset):
             receiver_audio = normalize(receiver_audio, norm='peak')
             source_audio = normalize(source_audio, norm='peak')
 
+        receiver_clip = receiver_audio
+        source_clip = source_audio
 
         # pad audio
         """ if self.use_librispeech:
