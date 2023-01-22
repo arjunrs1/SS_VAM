@@ -192,6 +192,7 @@ parser.add_argument("--use-vida", default=False, action='store_true')
 parser.add_argument("--eval-clean", default=False, action='store_true')
 parser.add_argument("--randomize-input", default=False, action='store_true')
 parser.add_argument("--use-audio-da", default=False, action='store_true')
+parser.add_argument("--use-speech-upsampler", default=False, action='store_true')
 
 
 def seed_worker(worker_id):

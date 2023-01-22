@@ -99,8 +99,13 @@ class ResidualBlock(nn.Module):
     self.diffusion_projection = Linear(512, residual_channels)
     if not uncond: # conditional model
       self.conditioner_projection = Conv1d(n_mels, 2 * residual_channels, 1)
+      #if use_rt60:
+      #  self.dilated_conv_rt60 = Conv1d(2 * residual_channels, 2 * residual_channels, 3, padding=dilation, dilation=dilation)
+      #else:
+      #  self.dilated_conv_rt60 = None
     else: # unconditional model
       self.conditioner_projection = None
+      #self.dilated_conv_rt60 = None
 
     self.use_rt60 = use_rt60
 
@@ -117,11 +122,14 @@ class ResidualBlock(nn.Module):
     else:
       conditioner = self.conditioner_projection(conditioner)
       y = self.dilated_conv(y) + conditioner
+      if self.use_rt60:
+        rt60_vector = torch.unsqueeze(rt60_feature.expand(-1, y.shape[2]),1).expand(-1, y.shape[1], -1)
+        y = y + rt60_vector
 
 
-    if self.use_rt60:
-      rt60_vector = torch.unsqueeze(rt60_feature.expand(-1, y.shape[2]),1).expand(-1, y.shape[1], -1)
-      y = self.dilated_conv_rt60(y) + rt60_vector
+    #if self.dilated_conv_rt60 is not None:
+    #  rt60_vector = torch.unsqueeze(rt60_feature.expand(-1, y.shape[2]),1).expand(-1, y.shape[1], -1)
+    #  y = self.dilated_conv_rt60(y) + rt60_vector
 
     gate, filter = torch.chunk(y, 2, dim=1)
     y = torch.sigmoid(gate) * torch.tanh(filter)

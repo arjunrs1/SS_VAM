@@ -31,7 +31,7 @@ class SoundSpacesSpeechDataset(Dataset):
                  use_real_imag=False, use_rgb=False, use_depth=False, use_seg=False, limited_fov=False, crop=False,
                  flip=False, use_rgbd=False, remove_oov=False, hop_length=160,
                  deterministic_eval=False, use_librispeech=False, convolve_random_rir=False, use_da=False,
-                 read_mp4=False, use_recv_audio=False, use_dereverb_sspeech=False, use_frozen_dereverb=False):
+                 read_mp4=False, use_recv_audio=False, use_dereverb_sspeech=False, use_frozen_dereverb=False, train_reverb_vocoder=False):
         self.split = split
         self.data_dir = os.path.join('data/soundspaces_speech', split)
         #self.files = glob.glob(self.data_dir + '/**/*.pkl', recursive=True)
@@ -50,6 +50,7 @@ class SoundSpacesSpeechDataset(Dataset):
         self.deterministic_eval = deterministic_eval
         self.use_dereverb_sspeech = use_dereverb_sspeech
         self.use_frozen_dereverb = use_frozen_dereverb
+        self.train_reverb_vocoder = train_reverb_vocoder
         self.use_librispeech = use_librispeech
 
         if remove_oov:
@@ -106,6 +107,10 @@ class SoundSpacesSpeechDataset(Dataset):
             sample['tgt_wav'] = src_wav
             sample['spectrogram'] = data['receiver_spectrogram'].T
         elif self.use_frozen_dereverb:
+            sample['src_wav'] = recv_wav
+            sample['tgt_wav'] = recv_wav
+            sample['spectrogram'] = data['receiver_spectrogram'].T
+        elif self.train_reverb_vocoder:
             sample['src_wav'] = recv_wav
             sample['tgt_wav'] = recv_wav
             sample['spectrogram'] = data['receiver_spectrogram'].T

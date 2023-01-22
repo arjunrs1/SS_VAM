@@ -107,6 +107,9 @@ class WaveNet(BaseAVModel):
         if args.use_warper:
             self.warper = Warpnet(view_dim=view_dim)
 
+        if args.use_speech_upsampler:
+            self.upsampler = nn.ConvTranspose1d(1, 1, kernel_size=2, stride=2)
+
         if args.scale_mag:
             self.mag_scaler = nn.Sequential(
                 nn.Linear(view_dim, 512),
@@ -199,6 +202,10 @@ class WaveNet(BaseAVModel):
             features = self.fusion(torch.concat(features, dim=1))
 
         x = batch['src_wav']
+
+        if self.args.use_speech_upsampler:
+            x = self.upsampler(x.unsqueeze(1)).squeeze()
+
         if self.args.use_warper:
             x = self.warper(x, features.unsqueeze(-1))
 
@@ -245,6 +252,9 @@ class WaveNet(BaseAVModel):
 
         if self.args.use_audio_da:
             apply_audio_data_augmentation(self.args, batch, phase)
+
+        if self.args.use_speech_upsampler:
+            apply_speech_downsampling(self.args, batch, device=self.device)
         
         pred_wav, intermediate_wav, scale = self.forward(batch)
 
@@ -385,3 +395,12 @@ def apply_audio_data_augmentation(args, batch, phase):
         prev_shape = batch['src_wav'].shape
         batch['src_wav'] = apply_augmentation(batch['src_wav'].unsqueeze(1), sample_rate=16000).squeeze(1)
         assert batch['src_wav'].shape == prev_shape, (batch['src_wav'].shape, prev_shape)
+
+def apply_speech_downsampling(args, batch, device, factor=2):
+    from torchaudio.transforms import Resample
+
+    resample = Resample(orig_freq=args.sample_rate, new_freq=args.sample_rate//factor).to(device=device)
+    
+    prev_shape = batch['src_wav'].shape
+    batch['src_wav'] = resample(batch['src_wav'].unsqueeze(1)).squeeze(1)
+    assert batch['src_wav'].shape == (prev_shape[0], prev_shape[1]//factor)

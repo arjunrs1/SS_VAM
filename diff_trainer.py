@@ -28,6 +28,9 @@ def _get_free_port():
 
 
 def main(args):
+  if args.train_reverb_vocoder:
+    assert not args.use_frozen_dereverb
+
   replica_count = device_count()
   if replica_count > 1:
     if params.batch_size % replica_count != 0:
@@ -63,6 +66,8 @@ if __name__ == '__main__':
       help='use 16-bit floating point operations for training')
   parser.add_argument('--use-rt60-feature', action='store_true', default=False,
       help='use rt60 as visual feature')
+  parser.add_argument('--train-reverb-vocoder', action='store_true', default=False,
+      help='use reverb input and output')
   parser.add_argument('--visualize', action='store_true', default=False,
       help='generate visualization')
   parser.add_argument('--sample-rate', default=16000, type=int,

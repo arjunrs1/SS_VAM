@@ -178,6 +178,8 @@ class DiffWaveLearner:
       return True
     except FileNotFoundError:
       return False
+    except IndexError:
+      return False
 
   def estimate_rt60(self, estimator, wav):
     stft = torch.stft(wav, n_fft=512, hop_length=160, win_length=400, window=torch.hamming_window(400, device=self.device),
@@ -255,7 +257,7 @@ class DiffWaveLearner:
       noisy_audio = noise_scale_sqrt * input_audio + (1.0 - noise_scale)**0.5 * noise
 
       predicted = self.model(noisy_audio, t, spectrogram, src_rt60)
-      loss = self.loss_fn(noise + (input_audio - tgt_audio), predicted.squeeze(1))  #modified loss function!
+      loss = self.loss_fn(noise, predicted.squeeze(1))
 
     self.scaler.scale(loss).backward()
     self.scaler.unscale_(self.optimizer)
@@ -273,10 +275,8 @@ class DiffWaveLearner:
     for features in tqdm(self.test_dataset, desc=f'Testing Epoch') if self.is_master else self.test_dataset:
       features = _nested_map(features, lambda x: x.to(device) if isinstance(x, torch.Tensor) else x)
       wav_loss, rt60_error, _ = self.test_step(features)
-      #L1_loss += wav_loss.item()
       L1_loss.append(wav_loss.item())
       RT60_error.append(rt60_error.item())
-      #RT60_error += rt60_error.item()
       if torch.isnan(wav_loss).any():
         raise RuntimeError(f'Detected NaN loss.')
 
@@ -376,7 +376,6 @@ def train(args, params):
 
   device = torch.device('cuda:0')
   torch.cuda.set_device(device)
-  #model = DiffWave(params, args.use_rt60_feature).cuda()
   model = DiffWave(params, args.use_rt60_feature).to(device)
   _train_impl(0, model, dataset, valid_dataset, test_dataset, args, params, device=device)
 
