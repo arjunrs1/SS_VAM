@@ -447,6 +447,10 @@ def generate_qual(args, model, dataset):
     
     for i, batch in enumerate(dataset):
         device = next(model.model.parameters()).device
+        batch = _nested_map(batch, lambda x: x.to(device) if isinstance(x, torch.Tensor) else x)
+        #print(device)
+        #for key in batch.keys():
+        #  batch[key].to(device)
         _, _, pred = model.test_step(batch)
 
         wav_dict = {

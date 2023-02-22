@@ -108,7 +108,12 @@ class WaveNet(BaseAVModel):
             self.warper = Warpnet(view_dim=view_dim)
 
         if args.use_speech_upsampler:
-            self.upsampler = nn.ConvTranspose1d(1, 1, kernel_size=2, stride=2)
+            upsampler = nn.ModuleList()
+            for i in range(int(np.log2(args.downsample_factor))):
+                upsampler.append(nn.Conv1d(1, 1, kernel_size=3, stride=1, padding=3**(i+1), dilation=3**(i+1)))
+                upsampler.append(nn.ConvTranspose1d(1, 1, kernel_size=2, stride=2))
+
+            self.upsampler = nn.Sequential(*upsampler)
 
         if args.scale_mag:
             self.mag_scaler = nn.Sequential(
@@ -203,6 +208,7 @@ class WaveNet(BaseAVModel):
 
         x = batch['src_wav']
 
+
         if self.args.use_speech_upsampler:
             x = self.upsampler(x.unsqueeze(1)).squeeze()
 
@@ -242,7 +248,7 @@ class WaveNet(BaseAVModel):
         if self.args.randomize_input:
             batch['src_wav'] = torch.roll(batch['src_wav'], shifts=1, dims=0)
 
-        #if dereverberation flaggged, perform dereverberation
+        #if dereverberation flagged, perform dereverberation
         if self.args.use_frozen_dereverb:
             dereverb_sspeech(batch, self.args.encode_wav, self.args.randomize_input, self.device, use_vida=self.args.use_vida)
         batch['original_src_wav'] = batch['src_wav']
@@ -254,7 +260,7 @@ class WaveNet(BaseAVModel):
             apply_audio_data_augmentation(self.args, batch, phase)
 
         if self.args.use_speech_upsampler:
-            apply_speech_downsampling(self.args, batch, device=self.device)
+            apply_speech_downsampling(self.args, batch, device=self.device, factor=self.args.downsample_factor)
         
         pred_wav, intermediate_wav, scale = self.forward(batch)
 

@@ -24,7 +24,8 @@ class AVSpeechDataset(SoundSpacesSpeechDataset):
         def __init__(self, split, normalize_whole=True, normalize_segment=False, use_real_imag=False,
                     use_rgb=False, use_depth=False, limited_fov=False,
                     remove_oov=False, hop_length=160, use_librispeech=False, convolve_random_rir=False, use_da=False,
-                    read_mp4=False, deterministic_eval=False, use_recv_audio=False, use_dereverb_sspeech=False, use_frozen_dereverb=False):
+                    read_mp4=False, deterministic_eval=False, use_recv_audio=False, use_dereverb_sspeech=False, use_frozen_dereverb=False,
+                    use_metricgan_dereverb=False, use_metricgan_debias=False):
 
             super().__init__(split)
             self.split = split
@@ -41,12 +42,18 @@ class AVSpeechDataset(SoundSpacesSpeechDataset):
             self.use_da = use_da
             self.read_mp4 = read_mp4
             self.use_frozen_dereverb = use_frozen_dereverb
+            self.use_metricgan_dereverb = use_metricgan_dereverb
+            self.use_metricgan_debias = use_metricgan_debias
 
             self.data_dir = 'data/acoustic_avspeech/'
             files = sorted(os.listdir(os.path.join(self.data_dir, 'img')))
             files = [str(i) + '.png' for i in range(len(files))]
-            print("NUM TOTAL FILES:")
-            print(len(files))
+
+            #with open('data/acoustic_avspeech/missing.npy', 'rb') as f:
+            #    missing = np.load(f)
+
+            #missing = [str(m)+".png" for m in list(missing)]
+            #train_missing_files = missing
 
             if split == 'train':
                 self.files = files[: int(len(files) * 0.95)]
@@ -99,7 +106,15 @@ class AVSpeechDataset(SoundSpacesSpeechDataset):
             audio_file = img_file.replace('img/', 'audio/').replace('.png', '.wav')
             rgb = np.array(Image.open(img_file))
             sr, recv_audio = wavfile.read(audio_file)
-            src_audio = np.zeros_like(recv_audio)
+            if self.use_metricgan_dereverb:
+                devb_file = img_file.replace('img/', 'metric_dereverb/audio/').replace('.png', '.wav')
+                sr, src_audio = wavfile.read(devb_file)
+            elif self.use_metricgan_debias:
+                debias_file = img_file.replace('img/', 'metric_debias/audio/').replace('.png', '.wav')
+                sr, src_audio = wavfile.read(debias_file)
+            else:
+                src_audio = np.zeros_like(recv_audio)
+            id = int(self.files[item].split(".png")[0])
 
             if self.use_librispeech:
                 ind = item % len(self.speech_files)
@@ -114,6 +129,7 @@ class AVSpeechDataset(SoundSpacesSpeechDataset):
             rgb = rgb.astype(np.float32)
             
             sample = dict()
+            sample['id'] = id
             
             src_wav, recv_wav = self.process_audio(src_audio, recv_audio)
             

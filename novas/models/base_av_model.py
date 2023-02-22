@@ -22,6 +22,7 @@ from novas.datasets.replay_dataset import to_tensor
 from novas.loss import MultiResolutionSTFTLoss, STFTLoss, LogMagSTFTLoss, MultiResolutionNoSCSTFTLoss, \
     MagLogMagSTFTLoss, MagSTFTLoss, WaveL2Loss, RelativeMagSTFTLoss, MagRelativeMagSTFTLoss
 from as_scripts.temporal_align import gcc_phat
+import torchaudio
 
 
 RT60_ESTIMATOR = None
@@ -163,9 +164,7 @@ class BaseAVModel(pl.LightningModule):
     def compute_loss(self, outputs):
         stats = {'loss': 0}
         pred, tgt = outputs['pred'], outputs['tgt']
-        #print(pred)
-        #print("PRED ABOVE, TGT BELOW")
-        #print(tgt)
+
 
         if self.args.skip_spec_loss:
             return stats
@@ -282,10 +281,15 @@ class BaseAVModel(pl.LightningModule):
             pred_wav = batch['src_wav']
         tgt_wav = batch['tgt_wav']
         tgt_wav = torch.unsqueeze(tgt_wav, 1)
-        #print(tgt_wav.shape)
-        #print("TGT_WAV")
 
-        #self.metrics = ['l2_distance', 'stft_distance', 'mag_distance']
+        if test and self.args.save_dereverbed_waveforms:
+            drvb_dir = os.path.join("/vision/asomaya1/vam_mod/audio_synthesis_main/data/acoustic_avspeech",
+                                     "wavenet_dereverb")
+            for id, wav in zip(batch['id'], pred_wav):
+                id_str = str(int(id.item()))
+                id_str = id_str + ".wav"
+                audio_path = os.path.join(drvb_dir, id_str)
+                torchaudio.save(audio_path, wav.detach().cpu(), 16000)
         
         if self.args.eval_speech_rt60:
             global RT60_ESTIMATOR
@@ -389,8 +393,7 @@ class BaseAVModel(pl.LightningModule):
         for metric in metrics:
             avg_value = torch.concat([output[metric].unsqueeze(-1) for output in gathered_outputs], dim=1).mean()
             self.logger.experiment.add_scalar(f'val/{metric}', avg_value, self.current_epoch)
-            print("CURRENT EPOCH HERE:")
-            print(self.current_epoch)
+
             output_str += f'{metric}: {avg_value:.4f}, '
 
             # manually save the best model
@@ -469,8 +472,6 @@ class BaseAVModel(pl.LightningModule):
 
 def eval_stft(wav):
     # return real and imaginary components as two channels
-    #print(wav.shape)
-    #print("SHAPE ABOVE")
     assert len(wav.shape) == 2
     spec = torch.stft(wav, n_fft=512, hop_length=160, win_length=400,
                       window=torch.hamming_window(400, device=wav.device), pad_mode='constant',

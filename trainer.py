@@ -193,7 +193,10 @@ parser.add_argument("--eval-clean", default=False, action='store_true')
 parser.add_argument("--randomize-input", default=False, action='store_true')
 parser.add_argument("--use-audio-da", default=False, action='store_true')
 parser.add_argument("--use-speech-upsampler", default=False, action='store_true')
-
+parser.add_argument("--downsample-factor", default=1, type=int)
+parser.add_argument("--use-metricgan-dereverb", default=False, action='store_true')
+parser.add_argument("--use-metricgan-debias", default=False, action='store_true')
+parser.add_argument("--save-dereverbed-waveforms", default=False, action='store_true')
 
 def seed_worker(worker_id):
     # worker_seed = torch.initial_seed() % 2**32
@@ -214,7 +217,7 @@ def main():
 
     if args.test or args.test_all or args.visualize or args.fast_dev_run:
         args.slurm = False
-        args.n_gpus = 1
+        args.n_gpus = 8
         args.num_node = 1
         args.progress_bar = True
         args.batch_size = 16
@@ -240,6 +243,12 @@ def main():
         
     if args.use_frozen_dereverb:
         assert not args.use_dereverb_sspeech
+
+    if args.downsample_factor != 1:
+        assert args.use_speech_upsampler
+
+    if args.use_metricgan_dereverb:
+        assert not args.use_frozen_dereverb
     
     folder = args.model_dir
     if not os.path.isdir(folder):
@@ -285,7 +294,8 @@ def run(args):
                             convolve_random_rir=args.convolve_random_rir, use_da=args.use_da,
                             read_mp4=args.read_mp4, use_recv_audio=args.use_recv_audio,
                             use_dereverb_sspeech=args.use_dereverb_sspeech,
-                            use_frozen_dereverb=args.use_frozen_dereverb)
+                            use_frozen_dereverb=args.use_frozen_dereverb, use_metricgan_dereverb=args.use_metricgan_dereverb,
+                            use_metricgan_debias=args.use_metricgan_debias)
         test_dataset = torch.utils.data.DataLoader(test_set, num_workers=1, batch_size=args.batch_size,
                                                    pin_memory=True, persistent_workers=True, worker_init_fn=seed_worker)
         print("NUM TEST FILES:")
@@ -297,7 +307,8 @@ def run(args):
                             convolve_random_rir=args.convolve_random_rir, use_da=args.use_da,
                             read_mp4=args.read_mp4, use_recv_audio=args.use_recv_audio,
                             use_dereverb_sspeech=args.use_dereverb_sspeech,
-                            use_frozen_dereverb=args.use_frozen_dereverb)
+                            use_frozen_dereverb=args.use_frozen_dereverb, use_metricgan_dereverb=args.use_metricgan_dereverb,
+                            use_metricgan_debias=args.use_metricgan_debias)
         train_dataset = torch.utils.data.DataLoader(train_set, shuffle=True, num_workers=args.num_worker,
                                                     pin_memory=True, batch_size=args.batch_size, persistent_workers=True)
         print("NUM TRAIN FILES:")
@@ -309,7 +320,8 @@ def run(args):
                             convolve_random_rir=args.convolve_random_rir, use_da=args.use_da,
                             read_mp4=args.read_mp4, use_recv_audio=args.use_recv_audio,
                             use_dereverb_sspeech=args.use_dereverb_sspeech,
-                            use_frozen_dereverb=args.use_frozen_dereverb)
+                            use_frozen_dereverb=args.use_frozen_dereverb, use_metricgan_dereverb=args.use_metricgan_dereverb,
+                            use_metricgan_debias=args.use_metricgan_debias)
         val_dataset = torch.utils.data.DataLoader(val_set, num_workers=args.num_worker, batch_size=args.batch_size,
                                                   pin_memory=True, persistent_workers=True)
         print("NUM VAL FILES:")
@@ -393,6 +405,7 @@ def run(args):
         # overfit_batches=10
     )
 
+
     if not args.test and not args.test_all and not args.visualize:
         trainer.fit(model, train_dataset, val_dataset,
                 ckpt_path=args.from_pretrained)
@@ -469,7 +482,7 @@ def generate_qual(args, model, dataset):
                 axes[0][0].imshow(np.squeeze(spec_dict['input'][j]))
                 axes[0][0].set_aspect(1 / axes[0][0].get_data_ratio())
                 axes[0][0].invert_yaxis()
-                axes[0][0].set_title('Input')
+                axes[0][0].set_title('Input ' + '(id: ' + str(int(batch['id'][j].cpu().numpy())) + ")")
 
                 plt.sca(axes[1][0])
                 waveshow(wav_dict['input'][j], args.sample_rate)

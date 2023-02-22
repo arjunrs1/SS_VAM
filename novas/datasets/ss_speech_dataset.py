@@ -29,7 +29,8 @@ class SoundSpacesSpeechDataset(Dataset):
                  use_real_imag=False, use_rgb=False, use_depth=False, use_seg=False, limited_fov=False, crop=False,
                  flip=False, use_rgbd=False, remove_oov=False, hop_length=160,
                  deterministic_eval=False, use_librispeech=False, convolve_random_rir=False, use_da=False,
-                 read_mp4=False, use_recv_audio=False, use_dereverb_sspeech=False, use_frozen_dereverb=False):
+                 read_mp4=False, use_recv_audio=False, use_dereverb_sspeech=False, use_frozen_dereverb=False,
+                 use_metricgan_dereverb=False):
         self.split = split
         self.data_dir = os.path.join('data/soundspaces_speech', split)
         self.files = glob.glob(self.data_dir + '/**/*.pkl', recursive=True)
@@ -188,14 +189,14 @@ class SoundSpacesSpeechDataset(Dataset):
                 start_index_src = 0
                 start_index_rec = 0
             else:
-                start_index_src = np.random.randint(0, source_audio.shape[0] - waveform_length) \
-                            if source_audio.shape[0] != waveform_length else 0
+                #start_index_src = np.random.randint(0, source_audio.shape[0] - waveform_length) \
+                #            if source_audio.shape[0] != waveform_length else 0
 
-                start_index_rec = np.random.randint(0, receiver_audio.shape[0] - waveform_length) \
-                            if receiver_audio.shape[0] != waveform_length else 0
+                #start_index_rec = np.random.randint(0, receiver_audio.shape[0] - waveform_length) \
+                #            if receiver_audio.shape[0] != waveform_length else 0
+                start_index_rec = 0
 
-            #start_index_src = 0
-            #start_index_rec = 0
+
             source_clip = source_audio[start_index_src: start_index_src + waveform_length]
             receiver_clip = receiver_audio[start_index_rec: start_index_rec + waveform_length]
 
@@ -207,8 +208,9 @@ class SoundSpacesSpeechDataset(Dataset):
             if (self.deterministic_eval and self.split != 'train') or use_start:
                 start_index = 0
             else:
-                start_index = np.random.randint(0, source_audio.shape[0] - waveform_length) \
-                            if source_audio.shape[0] != waveform_length else 0
+                #start_index = np.random.randint(0, source_audio.shape[0] - waveform_length) \
+                #            if source_audio.shape[0] != waveform_length else 0
+                start_index = 0
 
             source_clip = source_audio[start_index: start_index + waveform_length]
             receiver_clip = receiver_audio[start_index: start_index + waveform_length]
