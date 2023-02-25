@@ -183,7 +183,7 @@ class SoundSpacesSpeechDataset(Dataset):
                 source_audio = np.pad(source_audio, (0, waveform_length - source_audio.shape[0]))
 
             if waveform_length > receiver_audio.shape[0]:
-                source_audio = np.pad(receiver_audio, (0, waveform_length - receiver_audio.shape[0]))
+                receiver_audio = np.pad(receiver_audio, (0, waveform_length - receiver_audio.shape[0]))
 
             if (self.deterministic_eval and self.split != 'train') or use_start:
                 start_index_src = 0
@@ -195,6 +195,7 @@ class SoundSpacesSpeechDataset(Dataset):
                 #start_index_rec = np.random.randint(0, receiver_audio.shape[0] - waveform_length) \
                 #            if receiver_audio.shape[0] != waveform_length else 0
                 start_index_rec = 0
+                start_index_src = 0
 
 
             source_clip = source_audio[start_index_src: start_index_src + waveform_length]
@@ -215,16 +216,11 @@ class SoundSpacesSpeechDataset(Dataset):
             source_clip = source_audio[start_index: start_index + waveform_length]
             receiver_clip = receiver_audio[start_index: start_index + waveform_length]
 
-        #print(receiver_clip.shape)
         # normalize the short clip
         if self.normalize_segment:
             source_clip = normalize(source_clip, norm='peak')
             receiver_clip = normalize(receiver_clip, norm='peak')
 
-        #print("rec shape")
-        #print(receiver_clip.shape)
-        #print ("src shpe")
-        #print(source_clip.shape)
         return source_clip, receiver_clip
 
 

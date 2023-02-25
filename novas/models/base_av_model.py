@@ -301,6 +301,7 @@ class BaseAVModel(pl.LightningModule):
             if test:
                 self.test_stats['pred_rt60'] += pred_rt60.cpu().numpy().tolist()
                 self.test_stats['tgt_rt60'] += tgt_rt60.cpu().numpy().tolist()
+                self.test_stats['id'] += batch['id'].cpu().numpy().tolist()
 
         if 'l2_distance' in self.metrics:
             stats['l2_distance'] = (pred_wav - tgt_wav).pow(2).mean([1, 2])
@@ -368,7 +369,8 @@ class BaseAVModel(pl.LightningModule):
                     metric_scores[metric_name].append(scores[metric_name])
                     metric_scores[metric_name+'_diff'].append(abs(scores[metric_name] - tgt_scores[metric_name]))
                     metric_scores[metric_name+'_rel'].append(abs(scores[metric_name] - tgt_scores[metric_name]) / tgt_scores[metric_name])
-                    # self.test_stats[metric_name+'_diff'].append(abs(scores[metric_name] - tgt_scores[metric_name]))
+                    self.test_stats[metric_name+'_diff'] += abs(scores[metric_name] - tgt_scores[metric_name]).tolist()
+                    self.test_stats[metric_name+'_rel'] += (abs(scores[metric_name] - tgt_scores[metric_name]) / tgt_scores[metric_name]).tolist()
 
         # calculate delays between two waveforms
         if 'delay' in self.metrics:

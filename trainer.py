@@ -217,7 +217,7 @@ def main():
 
     if args.test or args.test_all or args.visualize or args.fast_dev_run:
         args.slurm = False
-        args.n_gpus = 8
+        args.n_gpus = 1
         args.num_node = 1
         args.progress_bar = True
         args.batch_size = 16
@@ -227,6 +227,7 @@ def main():
         args.num_worker = 10
 
     if args.visualize:
+        args.batch_size = 1
         args.audio_len = 40960
 
     if args.eval_clean:
@@ -444,12 +445,70 @@ def generate_qual(args, model, dataset):
     from scipy.io import wavfile
     from librosa.display import waveshow
     from as_scripts.webify import webify
+    from novas.models.base_av_model import load_rt60_estimator, measure_rt60_wrapper
+
+    #novas_av_mgan_vis, novas_av_mgan_vis_dbs, novas_av_re_vis_da
+    #novas_av_mgan_no_vis, novas_av_mgan_no_vis_dbs, novas_av_re_no_vis_da
+    _, model_name = os.path.split(args.model_dir)
+    vis_model = model_name
+    #b_model = "novas_av_mgan_no_vis_dbs"
+    split = "test-unseen"
+
+    split_name = "test_stats_" + split + ".json"
+    vis_path = os.path.join("/vision/asomaya1/vam_mod/audio_synthesis_main/data/models", vis_model, "v1", split_name)
+    #b_path = os.path.join("/vision/asomaya1/vam_mod/audio_synthesis_main/data/models", b_model, "v1", split_name)
+    #vis_path = os.path.join("/vision/asomaya1/vam_mod/audio_synthesis_main/data/pretrained-models/avspeech/avitar/test_stats_test-unseen_clean.json")
+    #b_path = os.path.join("/vision/asomaya1/vam_mod/audio_synthesis_main/data/pretrained-models/avspeech/avitar/test_stats_test-unseen_clean.json")
+
+
+    f = open(vis_path)  
+    data = json.load(f)
+    for i in data.keys():
+        print(i)
+    f.close()
+
+    #f = open(b_path)  
+    #data_no_vis = json.load(f)
+    #for i in data_no_vis.keys():
+    #    print(i)
+    #f.close()
+
+    pred = np.array(data['pred_rt60'])
+    tgt = np.array(data['tgt_rt60'])
+    id_vis = np.array(data['id'])
+
+    #pred_no_vis = np.array(data_no_vis['pred_rt60'])
+    #tgt_no_vis = np.array(data_no_vis['tgt_rt60'])
+    #id_no_vis = np.array(data_no_vis['id'])
+
+    vis_dict = {}
+    for idx, id in enumerate(id_vis):
+        vis_dict[id] = (pred[idx][0], tgt[idx][0])
+
+    #no_vis_dict = {}
+    #for idx, id in enumerate(id_no_vis):
+    #    no_vis_dict[id] = (pred_no_vis[idx][0], tgt_no_vis[idx][0])
+
+    vis_dict = sorted(vis_dict.items(), key=lambda x: abs(x[1][0] - x[1][1]), reverse=True)
+    #no_vis_dict = sorted(no_vis_dict.items(), key=lambda x: abs(x[1][0] - x[1][1]), reverse=True)
+
+    exs_poor = [int(id[0]) for id in vis_dict[:16]]
+    exs_good = [int(id[0]) for id in vis_dict[-16:]]
+
+    exs = exs_poor + exs_good
+
+
+    RT60_ESTIMATOR = load_rt60_estimator("cuda:0")
 
     qual_dir = os.path.join(args.model_dir, args.version, "qual")
     os.makedirs(qual_dir, exist_ok=True)
     count = 0
     
     for i, batch in enumerate(dataset):
+        
+        if int(batch['id'].item()) not in exs:
+            continue
+
         output = model.audio_synthesis(batch, i, phase='test')
         pred, tgt = output['pred'], output['tgt']
 
@@ -509,6 +568,13 @@ def generate_qual(args, model, dataset):
                 axes[1][2].set_ylim(-y_limit, y_limit)
                 axes[1][2].set_xticks(x_ticks)
 
+                pred = torch.from_numpy(wav_dict['pred'][j]).to(device="cuda").repeat(12,1)
+                tgt = torch.from_numpy(wav_dict['tgt'][j]).to(device="cuda").repeat(12,1)
+                pred_rt60 = round(model.estimate_rt60(RT60_ESTIMATOR, pred)[0].item(), 4)
+                tgt_rt60 = round(model.estimate_rt60(RT60_ESTIMATOR, tgt)[0].item(), 4)
+
+                ov_title = "Pred RT60: " + str(pred_rt60) + " Target RT60: " + str(tgt_rt60)
+                fig.suptitle(ov_title)
                 fig.tight_layout()
                 plt.savefig(os.path.join(qual_dir, f"{count}-plot.png"))
                 plt.close(fig)
