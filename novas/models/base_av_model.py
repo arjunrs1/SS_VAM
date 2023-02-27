@@ -369,8 +369,8 @@ class BaseAVModel(pl.LightningModule):
                     metric_scores[metric_name].append(scores[metric_name])
                     metric_scores[metric_name+'_diff'].append(abs(scores[metric_name] - tgt_scores[metric_name]))
                     metric_scores[metric_name+'_rel'].append(abs(scores[metric_name] - tgt_scores[metric_name]) / tgt_scores[metric_name])
-                    self.test_stats[metric_name+'_diff'] += abs(scores[metric_name] - tgt_scores[metric_name]).tolist()
-                    self.test_stats[metric_name+'_rel'] += (abs(scores[metric_name] - tgt_scores[metric_name]) / tgt_scores[metric_name]).tolist()
+                    #self.test_stats[metric_name+'_diff'] += abs(scores[metric_name] - tgt_scores[metric_name]).tolist()
+                    #self.test_stats[metric_name+'_rel'] += (abs(scores[metric_name] - tgt_scores[metric_name]) / tgt_scores[metric_name]).tolist()
 
         # calculate delays between two waveforms
         if 'delay' in self.metrics:
