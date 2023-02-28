@@ -489,13 +489,18 @@ def generate_qual(args, model, dataset):
     #for idx, id in enumerate(id_no_vis):
     #    no_vis_dict[id] = (pred_no_vis[idx][0], tgt_no_vis[idx][0])
 
-    vis_dict = sorted(vis_dict.items(), key=lambda x: abs(x[1][0] - x[1][1]), reverse=True)
+    vis_dict = sorted(vis_dict.items(), key=lambda x: abs(x[1][0]-x[1][1])/x[1][1], reverse=True)
     #no_vis_dict = sorted(no_vis_dict.items(), key=lambda x: abs(x[1][0] - x[1][1]), reverse=True)
 
-    exs_poor = [int(id[0]) for id in vis_dict[:16]]
-    exs_good = [int(id[0]) for id in vis_dict[-16:]]
+    exs_poor = [int(id[0]) for id in vis_dict[:8]]
 
-    exs = exs_poor + exs_good
+    middle_start_index = (len(vis_dict) - 8) // 2
+    middle_end_index = middle_start_index + 8
+    exs_ok = [int(id[0]) for id in vis_dict[middle_start_index:middle_end_index]]
+
+    exs_good = [int(id[0]) for id in vis_dict[-8:]]
+
+    exs = exs_poor + exs_ok + exs_good
 
 
     RT60_ESTIMATOR = load_rt60_estimator("cuda:0")
@@ -573,14 +578,15 @@ def generate_qual(args, model, dataset):
                 pred_rt60 = round(model.estimate_rt60(RT60_ESTIMATOR, pred)[0].item(), 4)
                 tgt_rt60 = round(model.estimate_rt60(RT60_ESTIMATOR, tgt)[0].item(), 4)
 
-                ov_title = "Pred RT60: " + str(pred_rt60) + " Target RT60: " + str(tgt_rt60)
+                rel_rt60_err = abs(pred_rt60-tgt_rt60)/tgt_rt60
+                ov_title = "Ratio RT60:" + str(round(rel_rt60_err,4))
                 fig.suptitle(ov_title)
                 fig.tight_layout()
                 plt.savefig(os.path.join(qual_dir, f"{count}-plot.png"))
                 plt.close(fig)
 
-            if 'src_rgb' in batch:
-                rgb = batch['src_rgb']
+            if 'original_rgb' in batch:
+                rgb = batch['original_rgb']
                 rgb = rgb.cpu()[j].permute(1, 2, 0).clip(0, 1).numpy()  # L/R channels are displayed separately
                 plt.imsave(os.path.join(qual_dir, f'{count}-src-rgb.png'), rgb)
             if 'tgt_rgb' in batch:
