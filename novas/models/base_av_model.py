@@ -298,6 +298,7 @@ class BaseAVModel(pl.LightningModule):
             pred_rt60 = self.estimate_rt60(RT60_ESTIMATOR, pred_wav[:,0])
             tgt_rt60 = self.estimate_rt60(RT60_ESTIMATOR, tgt_wav[:,0])
             stats['speech_rt60'] = (pred_rt60 - tgt_rt60).abs().mean().cpu().numpy()
+            stats['rt60_error'] = ((pred_rt60 - tgt_rt60)/tgt_rt60).abs().mean().cpu().numpy()
             if test:
                 self.test_stats['pred_rt60'] += pred_rt60.cpu().numpy().tolist()
                 self.test_stats['tgt_rt60'] += tgt_rt60.cpu().numpy().tolist()
@@ -345,8 +346,8 @@ class BaseAVModel(pl.LightningModule):
         tgt_wav = tgt_wav.reshape(-1, tgt_wav.shape[-1]).cpu().numpy()
         pred_wav = pred_wav.reshape(-1, pred_wav.shape[-1]).cpu().numpy()
         
-        if self.args.eval_speech_rt60:
-            stats['rt60_error'] = np.mean([calculate_relative_rt60_diff(y, x) for x, y in zip(tgt_wav, pred_wav)])
+        #if self.args.eval_speech_rt60:
+            #stats['rt60_error'] = np.mean([calculate_relative_rt60_diff(y, x) for x, y in zip(tgt_wav, pred_wav)])
 
         # calculate speech measurements
         metric_scores = defaultdict(list)

@@ -152,7 +152,7 @@ class WaveNet(BaseAVModel):
         self.first_val = True
         self.configure_loss()
         if args.use_librispeech and args.eval_clean:
-            self.metrics = []
+            self.metrics = ['mosnet']
         else:
             self.metrics = ['stft_distance', 'mag_distance', 'l2_distance']
         self.speech_metric_names = {'stoi', 'sisdr', 'bsseval', 'mosnet'}.intersection(self.metrics)
