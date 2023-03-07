@@ -182,6 +182,7 @@ class BaseAVModel(pl.LightningModule):
             stats['loss'] = stats['loss'] + loss[0] + loss[1]
         else:
             stats['mag_loss'] = loss
+
             stats['loss'] = loss
 
         if self.args.extra_wave_loss:
@@ -295,11 +296,14 @@ class BaseAVModel(pl.LightningModule):
             global RT60_ESTIMATOR
             if RT60_ESTIMATOR is None:
                 RT60_ESTIMATOR = load_rt60_estimator(self.device)
+
+            src_rt60 = self.estimate_rt60(RT60_ESTIMATOR, batch['src_wav'])
             pred_rt60 = self.estimate_rt60(RT60_ESTIMATOR, pred_wav[:,0])
             tgt_rt60 = self.estimate_rt60(RT60_ESTIMATOR, tgt_wav[:,0])
             stats['speech_rt60'] = (pred_rt60 - tgt_rt60).abs().mean().cpu().numpy()
             stats['rt60_error'] = ((pred_rt60 - tgt_rt60)/tgt_rt60).abs().mean().cpu().numpy()
             if test:
+                self.test_stats['src_rt60'] += src_rt60.cpu().numpy().tolist()
                 self.test_stats['pred_rt60'] += pred_rt60.cpu().numpy().tolist()
                 self.test_stats['tgt_rt60'] += tgt_rt60.cpu().numpy().tolist()
                 self.test_stats['id'] += batch['id'].cpu().numpy().tolist()
@@ -443,7 +447,10 @@ class BaseAVModel(pl.LightningModule):
 
     def save_test_stats(self):
         postfix = f'_{self.args.test_split}'
-        file_path = os.path.join(self.args.model_dir, self.args.version, 'test_stats' + postfix + '.json')
+        if self.args.use_librispeech and self.args.eval_clean:
+            file_path = os.path.join(self.args.model_dir, self.args.version, 'test_stats' + postfix + '_clean.json')
+        else:
+            file_path = os.path.join(self.args.model_dir, self.args.version, 'test_stats' + postfix + '.json')
         with open(file_path, 'w') as fo:
             json.dump(self.test_stats, fo)
 

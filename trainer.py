@@ -22,6 +22,8 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from novas.models.avitar import AViTAr
 from pytorch_lightning import seed_everything
 from pytorch_lightning.callbacks.progress import TQDMProgressBar
+from torch.utils.data import WeightedRandomSampler
+
 seed_everything(1)
 # torch.use_deterministic_algorithms(d=True)
 
@@ -197,6 +199,9 @@ parser.add_argument("--downsample-factor", default=1, type=int)
 parser.add_argument("--use-metricgan-dereverb", default=False, action='store_true')
 parser.add_argument("--use-metricgan-debias", default=False, action='store_true')
 parser.add_argument("--save-dereverbed-waveforms", default=False, action='store_true')
+parser.add_argument("--rt60-weighted-sampler", default=False, action='store_true')
+parser.add_argument("--rt60-weighted-sampler-data-frac", default=0.9, type=float)
+parser.add_argument("--use-rt60-loss", default=False, action='store_true')
 
 def seed_worker(worker_id):
     # worker_seed = torch.initial_seed() % 2**32
@@ -310,8 +315,15 @@ def run(args):
                             use_dereverb_sspeech=args.use_dereverb_sspeech,
                             use_frozen_dereverb=args.use_frozen_dereverb, use_metricgan_dereverb=args.use_metricgan_dereverb,
                             use_metricgan_debias=args.use_metricgan_debias)
-        train_dataset = torch.utils.data.DataLoader(train_set, shuffle=True, num_workers=args.num_worker,
-                                                    pin_memory=True, batch_size=args.batch_size, persistent_workers=True)
+        shuffle_data = True
+        if args.rt60_weighted_sampler:
+            shuffle_data = False
+            weights = train_set.compute_weights()
+            sampler = WeightedRandomSampler(weights=weights, num_samples=int(len(train_set) * args.rt60_weighted_sampler_data_frac), replacement=True)
+        else:
+            sampler = None
+        train_dataset = torch.utils.data.DataLoader(train_set, shuffle=shuffle_data, num_workers=args.num_worker,
+                                                    pin_memory=True, sampler=sampler, batch_size=args.batch_size, persistent_workers=True)
         print("NUM TRAIN FILES:")
         print(len(train_dataset))
         
@@ -447,19 +459,12 @@ def generate_qual(args, model, dataset):
     from as_scripts.webify import webify
     from novas.models.base_av_model import load_rt60_estimator, measure_rt60_wrapper
 
-    #novas_av_mgan_vis, novas_av_mgan_vis_dbs, novas_av_re_vis_da
-    #novas_av_mgan_no_vis, novas_av_mgan_no_vis_dbs, novas_av_re_no_vis_da
     _, model_name = os.path.split(args.model_dir)
     vis_model = model_name
-    #b_model = "novas_av_mgan_no_vis_dbs"
     split = "test-unseen"
 
     split_name = "test_stats_" + split + ".json"
     vis_path = os.path.join("/vision/asomaya1/vam_mod/audio_synthesis_main/data/models", vis_model, "v1", split_name)
-    #b_path = os.path.join("/vision/asomaya1/vam_mod/audio_synthesis_main/data/models", b_model, "v1", split_name)
-    #vis_path = os.path.join("/vision/asomaya1/vam_mod/audio_synthesis_main/data/pretrained-models/avspeech/avitar/test_stats_test-unseen_clean.json")
-    #b_path = os.path.join("/vision/asomaya1/vam_mod/audio_synthesis_main/data/pretrained-models/avspeech/avitar/test_stats_test-unseen_clean.json")
-
 
     f = open(vis_path)  
     data = json.load(f)
@@ -467,41 +472,22 @@ def generate_qual(args, model, dataset):
         print(i)
     f.close()
 
-    #f = open(b_path)  
-    #data_no_vis = json.load(f)
-    #for i in data_no_vis.keys():
-    #    print(i)
-    #f.close()
-
     pred = np.array(data['pred_rt60'])
     tgt = np.array(data['tgt_rt60'])
     id_vis = np.array(data['id'])
-
-    #pred_no_vis = np.array(data_no_vis['pred_rt60'])
-    #tgt_no_vis = np.array(data_no_vis['tgt_rt60'])
-    #id_no_vis = np.array(data_no_vis['id'])
 
     vis_dict = {}
     for idx, id in enumerate(id_vis):
         vis_dict[id] = (pred[idx][0], tgt[idx][0])
 
-    #no_vis_dict = {}
-    #for idx, id in enumerate(id_no_vis):
-    #    no_vis_dict[id] = (pred_no_vis[idx][0], tgt_no_vis[idx][0])
-
     vis_dict = sorted(vis_dict.items(), key=lambda x: abs(x[1][0]-x[1][1])/x[1][1], reverse=True)
-    #no_vis_dict = sorted(no_vis_dict.items(), key=lambda x: abs(x[1][0] - x[1][1]), reverse=True)
 
     exs_poor = [int(id[0]) for id in vis_dict[:8]]
-
     middle_start_index = (len(vis_dict) - 8) // 2
     middle_end_index = middle_start_index + 8
     exs_ok = [int(id[0]) for id in vis_dict[middle_start_index:middle_end_index]]
-
     exs_good = [int(id[0]) for id in vis_dict[-8:]]
-
     exs = exs_poor + exs_ok + exs_good
-
 
     RT60_ESTIMATOR = load_rt60_estimator("cuda:0")
 

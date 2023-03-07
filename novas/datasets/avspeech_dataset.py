@@ -15,9 +15,11 @@ from albumentations.pytorch import ToTensorV2
 import torchvision
 from PIL import Image
 from scipy.io import wavfile
+import tqdm
 
 from novas.datasets.ss_speech_dataset import to_tensor
 from novas.datasets.ss_speech_dataset import SoundSpacesSpeechDataset
+from novas.models.base_av_model import load_rt60_estimator
 
 
 class AVSpeechDataset(SoundSpacesSpeechDataset):
@@ -49,6 +51,12 @@ class AVSpeechDataset(SoundSpacesSpeechDataset):
             files = sorted(os.listdir(os.path.join(self.data_dir, 'img')))
             files = [str(i) + '.png' for i in range(len(files))]
 
+            rt60_file_name = self.split + "_rt60.npy"
+            rt60_scores_path = os.path.join(self.data_dir, rt60_file_name)
+            with open(rt60_scores_path, 'rb') as f:
+                self.rt60_scores = np.load(f)
+
+
             #with open('data/acoustic_avspeech/missing.npy', 'rb') as f:
             #    missing = np.load(f)
 
@@ -64,6 +72,8 @@ class AVSpeechDataset(SoundSpacesSpeechDataset):
             else:
                 self.files = files[int(len(files) * 0.975) + 1:]
 
+            #self.rt60_estimator = load_rt60_estimator(torch.device("cpu"))
+
             if use_librispeech:
                 speech_split = split if split != 'test-seen' else 'train'
                 self.speech_files = sorted(glob.glob(f'data/soundspaces_speech/{speech_split}/**/*.pkl', recursive=True))
@@ -75,6 +85,7 @@ class AVSpeechDataset(SoundSpacesSpeechDataset):
                     rir_split = split if split != 'test-seen' else 'train'
                     self.rir_list = pickle.load(fo)[rir_split]
                     print(f'Number of rirs: {len(self.rir_list)}')
+                    
                     
             if use_da:
                 # 270, 480, 144, 256
@@ -100,6 +111,27 @@ class AVSpeechDataset(SoundSpacesSpeechDataset):
 
         def __len__(self):
             return len(self.files)
+        
+        def estimate_rt60(self, estimator, wav):
+            stft = torch.stft(torch.from_numpy(wav), n_fft=512, hop_length=160, win_length=400, window=torch.hamming_window(400, device=torch.device("cpu")),
+                            pad_mode='constant', return_complex=True)
+            spec = torch.log1p(stft.abs()).unsqueeze(0).unsqueeze(0)
+            with torch.no_grad():
+                estimated_rt60 = estimator(spec)
+            return estimated_rt60
+        
+        def compute_weights(self):
+            if self.split == "train":
+                return self.rt60_scores
+            
+            train_rt60_path = os.path.join(self.data_dir, "train_rt60.npy")
+            with open(train_rt60_path, 'rb') as f:
+                train_rt60_scores = np.load(f)
+            return train_rt60_scores
+        
+        def compute_rt60(self, wav):
+            return self.estimate_rt60(self.rt60_estimator, wav).item()
+
 
         def __getitem__(self, item):
             img_file = os.path.join(self.data_dir, 'img', self.files[item])
@@ -132,6 +164,8 @@ class AVSpeechDataset(SoundSpacesSpeechDataset):
             sample['id'] = id
             
             src_wav, recv_wav = self.process_audio(src_audio, recv_audio)
+
+            sample['tgt_rt60'] = self.rt60_scores[item]
             
             #and test not in split - why did you add this in earlier?
             if self.use_frozen_dereverb:

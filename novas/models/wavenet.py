@@ -10,13 +10,16 @@ import torchvision
 import numpy as np
 import torch.nn.functional as F
 import speechmetrics
+import random
 
 from novas.models.base_av_model import BaseAVModel
 from novas.models.binaural_nets import HyperConvWavenet, WaveoutBlock, Warpnet
 from novas.models.vida import create_conv
 from novas.models.melgan_encoder import MelGANEncoder
+from novas.models.base_av_model import load_rt60_estimator
 
 DEREVERBERATOR = None
+RT60_ESTIMATOR = None
 
 def update_args(args, dic):
     for key, value in dic.items():
@@ -254,7 +257,8 @@ class WaveNet(BaseAVModel):
         batch['original_src_wav'] = batch['src_wav']
 
         if self.args.convolve_random_rir:
-            convolve_random_rir(batch)
+            if random.random() < 0.9:
+                convolve_random_rir(batch)
 
         if self.args.use_audio_da:
             apply_audio_data_augmentation(self.args, batch, phase)
@@ -293,6 +297,15 @@ class WaveNet(BaseAVModel):
                 pred = pred.reshape(-1, pred.shape[-1])
                 loss = self.loss(pred, tgt)
                 stats['loss'] = stats['loss'] + loss
+
+        if self.args.use_rt60_loss:
+            global RT60_ESTIMATOR
+            if RT60_ESTIMATOR is None:
+                RT60_ESTIMATOR = load_rt60_estimator(self.device)
+            pred_rt60 = self.estimate_rt60(RT60_ESTIMATOR, pred[:,0])
+            rt60_loss = F.mse_loss(pred_rt60, batch['tgt_rt60'])
+            stats['rt60_loss'] = rt60_loss
+            stats['loss'] = stats['loss'] + rt60_loss
 
         if self.args.use_spatial_classification_loss:
             audio_feat = self.compute_audio_feat(batch)
