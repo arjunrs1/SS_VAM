@@ -11,6 +11,8 @@ import numpy as np
 import torch.nn.functional as F
 import speechmetrics
 import random
+import os
+import torchaudio
 
 from novas.models.base_av_model import BaseAVModel
 from novas.models.binaural_nets import HyperConvWavenet, WaveoutBlock, Warpnet
@@ -155,35 +157,39 @@ class WaveNet(BaseAVModel):
         self.first_val = True
         self.configure_loss()
         if args.use_librispeech and args.eval_clean:
-            self.metrics = ['mosnet']
+            self.metrics = ['mosnet', 'stft_distance']
         else:
             self.metrics = ['stft_distance', 'mag_distance', 'l2_distance']
         self.speech_metric_names = {'stoi', 'sisdr', 'bsseval', 'mosnet'}.intersection(self.metrics)
         self.speech_metrics = speechmetrics.load(self.speech_metric_names, window=None)
 
+        self.vis_feat_dict = {}
 
     def compute_visual_feat(self, rgb):
         feat = self.visual_encoder(rgb)
-        feat = self.conv1x1(feat).reshape(feat.shape[0], -1)
-        return feat
+        final_feat = self.conv1x1(feat)
+        final_feat = final_feat.reshape(feat.shape[0], -1)
+        return feat, final_feat
 
     def forward(self, batch):
         features = []
+        vis_features = None
         if self.args.use_rgb:
-            if self.args.use_depth: 
+            if self.args.use_depth:
                 rgbd = torch.cat((batch['src_depth'], batch['src_rgb']),1)
-                features.append(self.compute_visual_feat(rgbd))
+                features.append(self.compute_visual_feat(rgbd)[1])
             else:
-                features.append(self.compute_visual_feat(batch['src_rgb']))
+                vis_features, final_features = self.compute_visual_feat(batch['src_rgb'])
+                features.append(final_features)
         else:
             if self.args.use_depth:
-                features.append(self.compute_visual_feat(batch['src_depth']))
+                features.append(self.compute_visual_feat(batch['src_depth'])[1])
         if self.args.use_depth_mini:
             features.append(batch['depth_mini'])
         if self.args.use_tgt_rgb:
-            features.append(self.compute_visual_feat(batch['tgt_rgb']))
+            features.append(self.compute_visual_feat(batch['tgt_rgb'])[1])
         if self.args.use_tgt_rgb_pano:
-            features.append(self.compute_visual_feat(batch['tgt_rgb_pano']))
+            features.append(self.compute_visual_feat(batch['tgt_rgb_pano'])[1])
         if self.args.use_tgt_pose:
             features.append(batch['tgt_pose'])
         if self.args.use_tgt_rotation:
@@ -207,7 +213,10 @@ class WaveNet(BaseAVModel):
             features = torch.ones((batch['src_wav'].shape[0],self.view_dim)).to(self.device)
             features = self.fusion(features)
         else:
-            features = self.fusion(torch.concat(features, dim=1))
+            if self.args.dataset == "avspeech":
+                features = self.fusion(torch.concat(features, dim=1))
+            else:
+                features = self.fusion(torch.concat(features, dim=1))
 
         x = batch['src_wav']
 
@@ -246,7 +255,8 @@ class WaveNet(BaseAVModel):
 
     def audio_synthesis(self, batch, batch_idx, phase=None):
         for key, value in batch.items():
-            batch[key] = value.to(device=self.device, dtype=torch.float)
+            if key != 'id':
+                batch[key] = value.to(device=self.device, dtype=torch.float)
 
         if self.args.randomize_input:
             batch['src_wav'] = torch.roll(batch['src_wav'], shifts=1, dims=0)
@@ -394,6 +404,7 @@ def convolve_random_rir(batch):
     for i in range(batch['src_wav'].shape[0]):
         rir = rirs[i: i + 1]
         audio = batch['src_wav'].unsqueeze(1)[i:i + 1]
+
         outputs.append(torch.nn.functional.conv1d(audio, rir, padding=rir.shape[-1] - 1))
     outputs = torch.cat(outputs, dim=0).squeeze(1)
     batch['src_wav'] = outputs[:, :batch['tgt_wav'].shape[1]].detach()

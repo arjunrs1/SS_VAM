@@ -23,6 +23,7 @@ from novas.loss import MultiResolutionSTFTLoss, STFTLoss, LogMagSTFTLoss, MultiR
     MagLogMagSTFTLoss, MagSTFTLoss, WaveL2Loss, RelativeMagSTFTLoss, MagRelativeMagSTFTLoss
 from as_scripts.temporal_align import gcc_phat
 import torchaudio
+import pickle
 
 
 RT60_ESTIMATOR = None
@@ -279,18 +280,24 @@ class BaseAVModel(pl.LightningModule):
 
         pred_wav = pred if self.args.decode_wav else self.spec2wav(pred, batch['src_wav'])
         if self.args.eval_input:
-            pred_wav = batch['src_wav']
+            pred_wav = batch['original_src_wav'].unsqueeze(1)
         tgt_wav = batch['tgt_wav']
         tgt_wav = torch.unsqueeze(tgt_wav, 1)
 
         if test and self.args.save_dereverbed_waveforms:
-            drvb_dir = os.path.join("/vision/asomaya1/vam_mod/audio_synthesis_main/data/acoustic_avspeech",
-                                     "wavenet_dereverb")
-            for id, wav in zip(batch['id'], pred_wav):
-                id_str = str(int(id.item()))
-                id_str = id_str + ".wav"
-                audio_path = os.path.join(drvb_dir, id_str)
-                torchaudio.save(audio_path, wav.detach().cpu(), 16000)
+            dirct = "soundspaces_speech" if self.args.dataset == "soundspaces" else "acoustic_avspeech"
+            drvb_dir = os.path.join("/vision/asomaya1/vam_mod/audio_synthesis_main/data", dirct, "wavenet_dereverb")
+
+            if 'id' in batch.keys():
+                for idx, wav in zip(batch['id'], batch['src_wav']):
+                    wav = wav.unsqueeze(0)
+                    if self.args.dataset == "soundspaces":
+                        id_str = str(idx)
+                    else:
+                        id_str = str(int(idx.item()))
+                    id_str = id_str + ".wav"
+                    audio_path = os.path.join(drvb_dir, id_str)
+                    torchaudio.save(audio_path, wav.detach().cpu(), 16000)
         
         if self.args.eval_speech_rt60:
             global RT60_ESTIMATOR
@@ -306,7 +313,11 @@ class BaseAVModel(pl.LightningModule):
                 self.test_stats['src_rt60'] += src_rt60.cpu().numpy().tolist()
                 self.test_stats['pred_rt60'] += pred_rt60.cpu().numpy().tolist()
                 self.test_stats['tgt_rt60'] += tgt_rt60.cpu().numpy().tolist()
-                self.test_stats['id'] += batch['id'].cpu().numpy().tolist()
+                if 'id' in batch.keys():
+                    if self.args.dataset == "soundspaces":
+                        self.test_stats['id'] += batch['id']
+                    else:
+                        self.test_stats['id'] += batch['id'].cpu().numpy().tolist()
 
         if 'l2_distance' in self.metrics:
             stats['l2_distance'] = (pred_wav - tgt_wav).pow(2).mean([1, 2])
@@ -317,6 +328,13 @@ class BaseAVModel(pl.LightningModule):
             #pred_spec_r, tgt_spec_r = eval_stft(pred_wav[:, 1]), eval_stft(tgt_wav[:, 1])
             #stats['stft_distance'] = (pred_spec - tgt_spec).pow(2).sum((1, 2, 3)).sqrt()
             stats['stft_distance'] = F.mse_loss(pred_spec, tgt_spec)
+            if test and (self.args.use_librispeech or self.args.single_source_eval):
+                src_spec = eval_stft(batch['src_wav'])
+                mse_loss = torch.mean(torch.nn.functional.mse_loss(pred_spec, src_spec, reduction='none'), dim=(1, 2, 3))
+                self.test_stats['stft_distance'] += mse_loss.cpu().numpy().tolist()
+            elif test:
+                mse_loss = torch.mean(torch.nn.functional.mse_loss(pred_spec, tgt_spec, reduction='none'), dim=(1, 2, 3))
+                self.test_stats['stft_distance'] += mse_loss.cpu().numpy().tolist()
 
         if 'mag_distance' in self.metrics:
             #print(pred_wav.shape)
@@ -448,6 +466,7 @@ class BaseAVModel(pl.LightningModule):
     def save_test_stats(self):
         postfix = f'_{self.args.test_split}'
         if self.args.use_librispeech and self.args.eval_clean:
+            print("saving librispeech test stats...")
             file_path = os.path.join(self.args.model_dir, self.args.version, 'test_stats' + postfix + '_clean.json')
         else:
             file_path = os.path.join(self.args.model_dir, self.args.version, 'test_stats' + postfix + '.json')

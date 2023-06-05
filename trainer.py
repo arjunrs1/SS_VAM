@@ -202,6 +202,12 @@ parser.add_argument("--save-dereverbed-waveforms", default=False, action='store_
 parser.add_argument("--rt60-weighted-sampler", default=False, action='store_true')
 parser.add_argument("--rt60-weighted-sampler-data-frac", default=0.9, type=float)
 parser.add_argument("--use-rt60-loss", default=False, action='store_true')
+parser.add_argument("--static-rt60-eval", default=False, action='store_true')
+parser.add_argument("--single-source-eval", default=False, action='store_true')
+parser.add_argument("--use-frozen-mgan-dvb", default=False, action='store_true')
+parser.add_argument("--use-high-av", default=False, action='store_true')
+parser.add_argument("--modified-visual-encoder", default=False, action='store_true')
+parser.add_argument("--use-diff-envs", default=False, action='store_true')
 
 def seed_worker(worker_id):
     # worker_seed = torch.initial_seed() % 2**32
@@ -210,12 +216,7 @@ def seed_worker(worker_id):
 
 
 def main():
-    print(torch.cuda.is_available())
-    print(torch.cuda.device_count())
-    print(torch.cuda.current_device())
-    
     args = parser.parse_args()
-    print(f'Model dir: {args.model_dir}')
 
     if args.visualize:
         args.test = False
@@ -300,12 +301,12 @@ def run(args):
                             convolve_random_rir=args.convolve_random_rir, use_da=args.use_da,
                             read_mp4=args.read_mp4, use_recv_audio=args.use_recv_audio,
                             use_dereverb_sspeech=args.use_dereverb_sspeech,
-                            use_frozen_dereverb=args.use_frozen_dereverb, use_metricgan_dereverb=args.use_metricgan_dereverb,
-                            use_metricgan_debias=args.use_metricgan_debias)
+                            use_frozen_dereverb=args.use_frozen_dereverb, use_metricgan_dereverb=args.use_metricgan_dereverb,                    
+                            use_metricgan_debias=args.use_metricgan_debias, version=args.version,
+                            static_rt60_eval=args.static_rt60_eval, single_source_eval=args.single_source_eval,
+                            use_frozen_mgan_dvb=args.use_frozen_mgan_dvb, use_high_av=args.use_high_av)
         test_dataset = torch.utils.data.DataLoader(test_set, num_workers=1, batch_size=args.batch_size,
                                                    pin_memory=True, persistent_workers=True, worker_init_fn=seed_worker)
-        print("NUM TEST FILES:")
-        print(len(test_dataset))
     else:
         train_set = dataset(split='train', use_rgb=True, use_depth=True, hop_length=args.hop_length,
                             remove_oov=args.remove_oov,
@@ -314,7 +315,9 @@ def run(args):
                             read_mp4=args.read_mp4, use_recv_audio=args.use_recv_audio,
                             use_dereverb_sspeech=args.use_dereverb_sspeech,
                             use_frozen_dereverb=args.use_frozen_dereverb, use_metricgan_dereverb=args.use_metricgan_dereverb,
-                            use_metricgan_debias=args.use_metricgan_debias)
+                            use_metricgan_debias=args.use_metricgan_debias, version=args.version,
+                            static_rt60_eval=args.static_rt60_eval, single_source_eval=args.single_source_eval,
+                            use_frozen_mgan_dvb=args.use_frozen_mgan_dvb, use_high_av=args.use_high_av)
         shuffle_data = True
         if args.rt60_weighted_sampler:
             shuffle_data = False
@@ -324,8 +327,6 @@ def run(args):
             sampler = None
         train_dataset = torch.utils.data.DataLoader(train_set, shuffle=shuffle_data, num_workers=args.num_worker,
                                                     pin_memory=True, sampler=sampler, batch_size=args.batch_size, persistent_workers=True)
-        print("NUM TRAIN FILES:")
-        print(len(train_dataset))
         
         val_set = dataset(split='val', use_rgb=True, use_depth=True, hop_length=args.hop_length,
                             remove_oov=args.remove_oov,
@@ -334,11 +335,11 @@ def run(args):
                             read_mp4=args.read_mp4, use_recv_audio=args.use_recv_audio,
                             use_dereverb_sspeech=args.use_dereverb_sspeech,
                             use_frozen_dereverb=args.use_frozen_dereverb, use_metricgan_dereverb=args.use_metricgan_dereverb,
-                            use_metricgan_debias=args.use_metricgan_debias)
+                            use_metricgan_debias=args.use_metricgan_debias, version=args.version,
+                            static_rt60_eval=args.static_rt60_eval, single_source_eval=args.single_source_eval,
+                            use_frozen_mgan_dvb=args.use_frozen_mgan_dvb, use_high_av=args.use_high_av)
         val_dataset = torch.utils.data.DataLoader(val_set, num_workers=args.num_worker, batch_size=args.batch_size,
                                                   pin_memory=True, persistent_workers=True)
-        print("NUM VAL FILES:")
-        print(len(val_dataset))
 
     if args.model == 'avitar':
         model = AViTAr(args)
@@ -461,10 +462,13 @@ def generate_qual(args, model, dataset):
 
     _, model_name = os.path.split(args.model_dir)
     vis_model = model_name
-    split = "test-unseen"
+    if args.use_librispeech:
+        split = "test-unseen_clean"
+    else:
+        split = "test-unseen"
 
     split_name = "test_stats_" + split + ".json"
-    vis_path = os.path.join("/vision/asomaya1/vam_mod/audio_synthesis_main/data/models", vis_model, "v1", split_name)
+    vis_path = os.path.join("/vision/asomaya1/vam_mod/audio_synthesis_main/data/models", vis_model, args.version, split_name)
 
     f = open(vis_path)  
     data = json.load(f)
@@ -474,19 +478,23 @@ def generate_qual(args, model, dataset):
 
     pred = np.array(data['pred_rt60'])
     tgt = np.array(data['tgt_rt60'])
+    stft = np.expand_dims(np.array(data['stft_distance']), axis=1)
     id_vis = np.array(data['id'])
 
     vis_dict = {}
     for idx, id in enumerate(id_vis):
-        vis_dict[id] = (pred[idx][0], tgt[idx][0])
+        vis_dict[id] = (pred[idx][0], tgt[idx][0], stft[idx][0])
 
-    vis_dict = sorted(vis_dict.items(), key=lambda x: abs(x[1][0]-x[1][1])/x[1][1], reverse=True)
+    if args.single_source_eval:
+        vis_dict = sorted(vis_dict.items(), key=lambda x: abs(x[1][2]), reverse=True)
+    else:
+        vis_dict = sorted(vis_dict.items(), key=lambda x: abs(x[1][0]-x[1][1])/x[1][1], reverse=True)
 
-    exs_poor = [int(id[0]) for id in vis_dict[:8]]
+    exs_poor = [id[0] for id in vis_dict[:8]]
     middle_start_index = (len(vis_dict) - 8) // 2
     middle_end_index = middle_start_index + 8
-    exs_ok = [int(id[0]) for id in vis_dict[middle_start_index:middle_end_index]]
-    exs_good = [int(id[0]) for id in vis_dict[-8:]]
+    exs_ok = [id[0] for id in vis_dict[middle_start_index:middle_end_index]]
+    exs_good = [id[0] for id in vis_dict[-8:]]
     exs = exs_poor + exs_ok + exs_good
 
     RT60_ESTIMATOR = load_rt60_estimator("cuda:0")
@@ -495,10 +503,10 @@ def generate_qual(args, model, dataset):
     os.makedirs(qual_dir, exist_ok=True)
     count = 0
     
+    max_exs = 32 if not args.single_source_eval or args.use_diff_envs else 1
     for i, batch in enumerate(dataset):
-        
-        if int(batch['id'].item()) not in exs:
-            continue
+        if count >= max_exs:
+                break
 
         output = model.audio_synthesis(batch, i, phase='test')
         pred, tgt = output['pred'], output['tgt']
@@ -523,6 +531,8 @@ def generate_qual(args, model, dataset):
 
         for j in tqdm(range(pred.shape[0])):
             y_limit = max([np.abs(wav[j]).max() for wav in wav_dict.values()]) + 0.03
+            if wav_dict['input'].shape != (1,40960):
+                wav_dict['input'] = np.expand_dims(wav_dict['input'], 0)
             audio_duration = wav_dict['input'].shape[-1] / args.sample_rate
             step = 0.2 if args.audio_len == 16000 else 0.5
             x_ticks = np.arange(step, audio_duration, step=step)
@@ -532,7 +542,6 @@ def generate_qual(args, model, dataset):
                 axes[0][0].imshow(np.squeeze(spec_dict['input'][j]))
                 axes[0][0].set_aspect(1 / axes[0][0].get_data_ratio())
                 axes[0][0].invert_yaxis()
-                axes[0][0].set_title('Input ' + '(id: ' + str(int(batch['id'][j].cpu().numpy())) + ")")
 
                 plt.sca(axes[1][0])
                 waveshow(wav_dict['input'][j], args.sample_rate)
@@ -565,14 +574,19 @@ def generate_qual(args, model, dataset):
                 tgt_rt60 = round(model.estimate_rt60(RT60_ESTIMATOR, tgt)[0].item(), 4)
 
                 rel_rt60_err = abs(pred_rt60-tgt_rt60)/tgt_rt60
-                ov_title = "Ratio RT60:" + str(round(rel_rt60_err,4))
+                if args.single_source_eval:
+                    stft_dist = torch.mean((pred - tgt)**2, axis=1)[0].item()
+                    ov_title = "ID: " + str(batch['id'][0].item()) + " RT60(p,t): " + str(round(pred_rt60,4)) + ", " + str(round(tgt_rt60,4))
+                else:
+                    ov_title = "Rel RT Err:" + str(round(rel_rt60_err,4))
                 fig.suptitle(ov_title)
                 fig.tight_layout()
                 plt.savefig(os.path.join(qual_dir, f"{count}-plot.png"))
                 plt.close(fig)
 
-            if 'original_rgb' in batch:
-                rgb = batch['original_rgb']
+            if 'original_rgb' in batch or 'src_rgb' in batch:
+                rgb = batch['original_rgb'] if 'original_rgb' in batch else batch['src_rgb']
+
                 rgb = rgb.cpu()[j].permute(1, 2, 0).clip(0, 1).numpy()  # L/R channels are displayed separately
                 plt.imsave(os.path.join(qual_dir, f'{count}-src-rgb.png'), rgb)
             if 'tgt_rgb' in batch:
@@ -601,14 +615,18 @@ def generate_qual(args, model, dataset):
         html_short_dir = args.model_dir.split("/")[-1]
         html_dir = os.path.join("qual_htmls", html_short_dir)
         os.makedirs(html_dir, exist_ok=True)
-        target_file = f'{html_dir}/{args.version}.html'
+        if len(args.version.split("/")) == 1:
+            target_file = f'{html_dir}/{args.version}.html'
+        else:
+            target_dir = os.path.join(html_dir, args.version.split("/")[-2])
+            os.makedirs(target_dir, exist_ok=True)
+            target_file = f'{target_dir}/{args.version.split("/")[-1]}.html'
 
 
         if os.path.exists(target_file):
             os.remove(target_file)
-        os.symlink(os.path.join(os.path.abspath(qual_dir), 'index.html'), target_file)
-        if count > 31:
-            break
+        os.symlink(os.path.join(os.path.abspath(qual_dir), 'index.html'),
+                    target_file)
 
 
 if __name__ == "__main__":
