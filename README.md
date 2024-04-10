@@ -1,19 +1,11 @@
-# Diffusion and WaveNet Visual Acoustic Matching Repo
+# Self-Supervised Visual Acoustic Matching
+This repository contains the PyTorch implementation of our **NeurIPS 2023 paper** and dataset:
 
-You will need to create a symlink folder called "data" to "/vision/vision_data/sound-spaces/data/vam/data".
+[**Self-Supervised Visual Acoustic Matching**](https://arxiv.org/pdf/2307.15064.pdf)   
+Arjun Somayazulu, Changan Chen, Kristen Grauman  
+The University of Texas at Austin, FAIR  
 
-## Non-visual diffusion model:
+Project website: https://vision.cs.utexas.edu/projects/ss_vam/
 
-### Train:
-python diff_trainer.py --model-dir data/models/<MODEL_NAME> --use-pretrained --use-frozen-dereverb
 
-### Test:
-python diff_trainer.py --model-dir data/models/<MODEL_NAME> --use-pretrained --use-frozen-dereverb --test
-
-## Visual diffusion model:
-
-### Train:
-python diff_trainer.py --model-dir data/models/<MODEL_NAME> --use-pretrained --use-frozen-dereverb --use-rt60-feature
-
-### Test:
-python diff_trainer.py --model-dir data/models/<MODEL_NAME> --use-pretrained --use-frozen-dereverb --use-rt60-feature --test
+## Code and datasets coming soon!
