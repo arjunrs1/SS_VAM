@@ -408,7 +408,7 @@ def run(args):
         logger=logger,
         fast_dev_run=args.fast_dev_run,
         gradient_clip_val=args.gradient_clip_val,
-        gradient_clip_algorithm="value"
+        gradient_clip_algorithm="value",
         # profiler='simple',
         # limit_train_batches=1,
         # limit_val_batches=1,
@@ -417,6 +417,7 @@ def run(args):
         # max_epochs=1,
         # profiler='simple'
         # overfit_batches=10
+        accelerator='cpu'
     )
 
 

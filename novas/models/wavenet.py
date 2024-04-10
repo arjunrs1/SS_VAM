@@ -159,7 +159,7 @@ class WaveNet(BaseAVModel):
         if args.use_librispeech and args.eval_clean:
             self.metrics = ['mosnet', 'stft_distance']
         else:
-            self.metrics = ['stft_distance', 'mag_distance', 'l2_distance']
+            self.metrics = ['stft_distance', 'mag_distance', 'l2_distance', 'drr_error']
         self.speech_metric_names = {'stoi', 'sisdr', 'bsseval', 'mosnet'}.intersection(self.metrics)
         self.speech_metrics = speechmetrics.load(self.speech_metric_names, window=None)
 

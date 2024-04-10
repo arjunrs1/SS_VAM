@@ -274,6 +274,86 @@ class BaseAVModel(pl.LightningModule):
             spec = spec.reshape((b, c) + spec.shape[1:])
 
         return spec
+    
+    def batch_normalize(self, audio, norm='peak'):
+        """
+        normalize IR
+        :param audio: IR
+        :param norm: normalization mode
+        :return: normalized IR
+        """
+        if norm == 'peak':
+            peaks, _ = torch.max(torch.abs(audio), dim=1, keepdim=True)
+            return torch.div(audio, peaks)
+        elif norm == 'rms':
+            if torch.is_tensor(audio):
+                audio = audio.numpy()
+            audio_without_padding = np.trim_zeros(audio, trim='b')
+            rms = np.sqrt(np.mean(np.square(audio_without_padding))) * 100
+            if rms != 0:
+                return audio / rms
+            else:
+                return audio
+        else:
+            raise NotImplementedError
+    
+    def measure_drr_energy_ratio(self, y_batch, cutoff_time=0.003, fs=44100):
+        """
+        get direct to reverberant energy ratio (DRR)
+        :param y: IR
+        :param cutoff_time: cutoff time to compute DRR
+        :param fs: sampling frequency
+        :return: DRR
+        """
+        direct_sound_idx = int(cutoff_time * fs)
+
+        # removing leading silence
+        y_batch = self.batch_normalize(y_batch)
+
+        drrs = []
+        for y in y_batch:  
+            y = np.trim_zeros(np.array(y), trim='fb')
+
+            # everything up to the given idx is summed up and treated as direct sound energy
+            y = np.power(y, 2)
+            direct = sum(y[:direct_sound_idx + 1])
+            reverberant = sum(y[direct_sound_idx + 1:])
+            if direct == 0 or reverberant == 0:
+                drr = 1
+                # print('Direct or reverberant is 0')
+            else:
+                drr = 10 * np.log10(direct / reverberant)
+            drrs.append(drr)
+
+        return torch.tensor(drrs)
+
+
+    def calculate_drr_diff(self, gt, est, cutoff_time=0.003, fs=16000, compute_relative_diff=True, get_diff_val=True,
+        get_gt_val=False, get_pred_val=False,):
+        """
+        get difference in DRR, DRR for gt or DRR for estimated IR
+        :param gt: gt IR
+        :param est: estimated IR
+        :param cutoff_time: cutoff time to compute DRR
+        :param fs: sampling frequency
+        :param compute_relative_diff: flag to compute relative difference
+        :param get_diff_val: flag to get difference in DRR
+        :param get_gt_val: flag to get DRR of gt IR
+        :param get_pred_val: flag to get DRR of estimated IR
+        :return: difference in DRR, DRR of gt IR or DRR of estimated IR
+        """
+        drr_gt = self.measure_drr_energy_ratio(gt, cutoff_time=cutoff_time, fs=fs)
+        drr_est = self.measure_drr_energy_ratio(est, cutoff_time=cutoff_time, fs=fs)
+        diff = torch.abs(drr_gt - drr_est)
+        if compute_relative_diff:
+            diff = torch.abs(diff / drr_gt)
+
+        if get_diff_val:
+            return diff
+        elif get_gt_val:
+            return drr_gt
+        elif get_pred_val:
+            return drr_est
 
     def validation_step(self, batch, batch_idx, convolve_rir=False, test=False):
         stats, pred, tgt = self.run_step(batch, batch_idx, phase='val' if not test else 'test')
@@ -308,7 +388,7 @@ class BaseAVModel(pl.LightningModule):
             pred_rt60 = self.estimate_rt60(RT60_ESTIMATOR, pred_wav[:,0])
             tgt_rt60 = self.estimate_rt60(RT60_ESTIMATOR, tgt_wav[:,0])
             stats['speech_rt60'] = (pred_rt60 - tgt_rt60).abs().mean().cpu().numpy()
-            stats['rt60_error'] = ((pred_rt60 - tgt_rt60)/tgt_rt60).abs().mean().cpu().numpy()
+            stats['rt60_error'] = ((pred_rt60 - tgt_rt60)/tgt_rt60).abs().mean().cpu().numpy()            
             if test:
                 self.test_stats['src_rt60'] += src_rt60.cpu().numpy().tolist()
                 self.test_stats['pred_rt60'] += pred_rt60.cpu().numpy().tolist()
@@ -321,6 +401,9 @@ class BaseAVModel(pl.LightningModule):
 
         if 'l2_distance' in self.metrics:
             stats['l2_distance'] = (pred_wav - tgt_wav).pow(2).mean([1, 2])
+
+        if 'drr_error' in self.metrics:
+            stats['drr_error'] = self.calculate_drr_diff(pred_wav[:,0], tgt_wav[:,0]).mean().cpu().numpy()
 
         if 'stft_distance' in self.metrics:
             
@@ -339,10 +422,12 @@ class BaseAVModel(pl.LightningModule):
         if 'mag_distance' in self.metrics:
             #print(pred_wav.shape)
             pred_spec_l, tgt_spec_l = eval_mag(pred_wav[:, 0]), eval_mag(tgt_wav[:, 0])
+            pred_spec_log, tgt_spec_log = eval_mag(pred_wav[:, 0], log=True), eval_mag(tgt_wav[:, 0], log=True)
             #print(pred_spec_l.shape)
             #pred_spec_r, tgt_spec_r = eval_mag(pred_wav[:, 1]), eval_mag(tgt_wav[:, 1])
             #stats['mag_distance'] = (pred_spec_l - tgt_spec_l).pow(2).sum((1, 2)).sqrt()
-            stats['mag_distance'] = F.mse_loss(pred_spec_l, tgt_spec_l)
+            stats['mag_distance'] = F.mse_loss(pred_spec_l, tgt_spec_l) 
+            stats['log_mag_distance'] = F.mse_loss(pred_spec_log, tgt_spec_log)          
             #print(stats['mag_distance'])
 
         if 'lr_ratio' in self.metrics:
