@@ -8,4 +8,4 @@ The University of Texas at Austin, FAIR
 Project website: https://vision.cs.utexas.edu/projects/ss_vam/
 
 
-## Code and datasets coming soon!
+## Datasets coming soon!
