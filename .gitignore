@@ -1,4 +1,27 @@
-.idea
-data/
+.idea/
+.vscode/
+/data
+/data/
+/runs/
+/runs_eval/
+/qual_htmls/
+/survey_exs/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
 .ipynb_checkpoints/
 __pycache__/
+*.py[cod]
+*.ckpt
+*.pth
+*.pt
+*.pkl
+/*.npy
+/*.png
+/*.ipynb
+/README copy.md
+/setup copy.py
+.env
+.env.*
+!.env.example

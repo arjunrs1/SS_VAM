@@ -14,20 +14,6 @@ import warnings
 warnings.simplefilter('ignore', FutureWarning)
 warnings.simplefilter("ignore", UserWarning)
 
-import torch
-import numpy
-from tqdm import tqdm
-from pytorch_lightning import Trainer, loggers
-from pytorch_lightning.callbacks import ModelCheckpoint
-from novas.models.avitar import AViTAr
-from pytorch_lightning import seed_everything
-from pytorch_lightning.callbacks.progress import TQDMProgressBar
-from torch.utils.data import WeightedRandomSampler
-
-seed_everything(1)
-# torch.use_deterministic_algorithms(d=True)
-
-
 parser = argparse.ArgumentParser()
 parser.add_argument("--run-type", choices=["train", "eval"], default='train')
 parser.add_argument("--model-dir", default='data/models/novas')
@@ -42,6 +28,7 @@ parser.add_argument("--use-rgb", default=False, action='store_true')
 parser.add_argument("--use-depth", default=False, action='store_true')
 parser.add_argument("--num-channel", default=1, type=int)
 parser.add_argument("--n-gpus", default=1, type=int)
+parser.add_argument("--accelerator", choices=["auto", "gpu", "cpu"], default="auto")
 parser.add_argument("--num-node", default=1, type=int)
 parser.add_argument("--batch-size", default=32, type=int)
 parser.add_argument("--max-epochs", default=60, type=int)
@@ -210,6 +197,7 @@ parser.add_argument("--modified-visual-encoder", default=False, action='store_tr
 parser.add_argument("--use-diff-envs", default=False, action='store_true')
 
 def seed_worker(worker_id):
+    import numpy
     # worker_seed = torch.initial_seed() % 2**32
     numpy.random.seed(worker_id)
     random.seed(worker_id)
@@ -276,6 +264,19 @@ def main():
 
 
 def run(args):
+    import torch
+    from pytorch_lightning import Trainer, loggers, seed_everything
+    from pytorch_lightning.callbacks import ModelCheckpoint
+    from pytorch_lightning.callbacks.progress import TQDMProgressBar
+    from torch.utils.data import WeightedRandomSampler
+    from novas.models.avitar import AViTAr
+
+    seed_everything(1)
+    use_gpu = args.accelerator == "gpu" or (
+        args.accelerator == "auto" and args.n_gpus > 0 and torch.cuda.is_available()
+    )
+    trainer_strategy = {"strategy": "ddp"} if (use_gpu and args.n_gpus > 1) or args.num_node > 1 else {}
+
     logging.basicConfig(level=logging.INFO, format='%(asctime)s, %(levelname)s: %(message)s',
                         datefmt="%Y-%m-%d %H:%M:%S")
 
@@ -396,10 +397,9 @@ def run(args):
     progress_callback = TQDMProgressBar(refresh_rate=args.fast_dev_run or args.progress_bar)
 
     trainer = Trainer(
-        gpus=args.n_gpus,
+        gpus=args.n_gpus if use_gpu else 0,
         num_nodes=args.num_node,
         # auto_select_gpus=True,
-        strategy="ddp",
         # auto_scale_batch_size="binsearch",
         benchmark=True,
         max_epochs=args.max_epochs,
@@ -417,7 +417,8 @@ def run(args):
         # max_epochs=1,
         # profiler='simple'
         # overfit_batches=10
-        accelerator='cpu'
+        accelerator="gpu" if use_gpu else "cpu",
+        **trainer_strategy
     )
 
 
@@ -453,6 +454,8 @@ def run(args):
 
 
 def generate_qual(args, model, dataset):
+    from tqdm import tqdm
+    import torch
     import json
     import numpy as np
     import matplotlib.pyplot as plt
@@ -469,7 +472,7 @@ def generate_qual(args, model, dataset):
         split = "test-unseen"
 
     split_name = "test_stats_" + split + ".json"
-    vis_path = os.path.join("/vision/asomaya1/vam_mod/audio_synthesis_main/data/models", vis_model, args.version, split_name)
+    vis_path = os.path.join(args.model_dir, args.version, split_name)
 
     f = open(vis_path)  
     data = json.load(f)

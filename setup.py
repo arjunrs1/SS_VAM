@@ -4,53 +4,20 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-from setuptools import setup
+from pathlib import Path
+from setuptools import find_packages, setup
 
-
+ROOT = Path(__file__).resolve().parent
 setup(
-    name='audio_synthesis',
-    version='0.1.1',
-    packages=[
-        'novas',
-        'as_scripts'
-    ],
-    install_requires=[
-        'pytorch_lightning',
-        'torch',
-        'numpy>=1.16.1',
-        'yacs>=0.1.5',
-        'numpy-quaternion>=2019.3.18.14.33.20',
-        'attrs>=19.1.0',
-        'opencv-python>=3.3.0',
-        'imageio>=2.2.0',
-        'imageio-ffmpeg>=0.2.0',
-        'scipy>=1.0.0',
-        'tqdm>=4.0.0',
-        'Pillow',
-        'pydub',
-        'getch',
-        'matplotlib',
-        'librosa',
-        'torchsummary',
-        'gitpython',
-        'tqdm',
-        'notebook',
-        'moviepy',
-        'astropy',
-        'scikit-image',
-        'speechbrain',
-        'pesq',
-        'torchaudio',
-        'torchvision',
-        'decord',
-        'albumentations',
-        'submitit',
-        'einops'
-    ],
-    extras_require={
-        'test': [
-            'pylint',
-            'pytest',
-        ],
-    },
+    name="ss-vam",
+    version="0.1.0",
+    description="Self-Supervised Visual Acoustic Matching (NeurIPS 2023)",
+    long_description=(ROOT / "README.md").read_text(),
+    long_description_content_type="text/markdown",
+    url="https://github.com/arjunrs1/SS_VAM",
+    packages=find_packages(include=["novas", "novas.*", "as_scripts", "as_scripts.*"]),
+    py_modules=["trainer"],
+    python_requires=">=3.7,<3.11",
+    install_requires=[line.strip() for line in (ROOT / "requirements.txt").read_text().splitlines()
+                      if line.strip() and not line.startswith("#")],
 )

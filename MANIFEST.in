@@ -1,0 +1,3 @@
+include README.md LICENSE requirements.txt THIRD_PARTY_NOTICES.md
+recursive-include third_party/licenses *.txt
+recursive-include recipes *.py *.yaml *.txt *.md

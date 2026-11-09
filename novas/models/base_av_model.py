@@ -366,7 +366,7 @@ class BaseAVModel(pl.LightningModule):
 
         if test and self.args.save_dereverbed_waveforms:
             dirct = "soundspaces_speech" if self.args.dataset == "soundspaces" else "acoustic_avspeech"
-            drvb_dir = os.path.join("/vision/asomaya1/vam_mod/audio_synthesis_main/data", dirct, "wavenet_dereverb")
+            drvb_dir = os.path.join("data", dirct, "wavenet_dereverb")
 
             if 'id' in batch.keys():
                 for idx, wav in zip(batch['id'], batch['src_wav']):
